@@ -22,7 +22,7 @@ Gemma4-26B-A4B
 - vocab 262,144 → lm_head 하나가 352 MiB
 
 expert
-- 1개 = 1.45 MiB (2-bit QS2) / 1.23 MiB (ternary TL2)
+- 1개 = 1.45 MiB (2-bit QS2) / 1.23 MiB (ternary TL2) (자세한 건 4절 expert 1개 크기)
 - 30 layer × 128 = 3,840 expert (≈ 5.4 GiB, QS2 slot 기준 계산값)
 - pack 전체 7.5 GB (QS2) / 6.6 GB (TL2)
 
@@ -240,6 +240,75 @@ DSP 칩 안
 | RoPE table | 262,144 위치 전부 (fp32 1.5 GiB + fp16 768 MiB, OOM) | 실제 길이만큼 |
 
 peak (host anon + DSP) : 1,028토큰 요약 4.2 GB (10/13)
+
+### expert 1개 크기
+
+expert 1개 = gate_up [2816 → 1408] + down [704 → 2816] = weight 5,947,392개
+
+| 포맷 | gate_up | down | slot (scale, column sum 포함) |
+|---|---|---|---|
+| BF16 원본 | 7.56 MiB | 3.78 MiB | 11.3 MiB |
+| int4 WH (QS4CX_WH, 28/29층 affine) | 1.89 MiB | 0.95 MiB | 3.0 MB |
+| 2-bit QS2CX_WH | 0.95 MiB | 0.47 MiB | 1,523,712 B (1.45 MiB) |
+| ternary TL2CX_WH | 811 KiB | 413 KiB | 1,290,240 B (1.23 MiB) |
+
+- 참고 : LFM2 expert 1개 = 5.25 MiB (int4, gate_up 3.5 + down 1.75)
+- decode 토큰당 expert 240개 (8개 × 30층) 읽음 → QS2 약 349 MiB, TL2 약 295 MiB (계산값)
+- slot 크기와 3.0 MB는 커밋 기록값, 나머지는 shape으로 계산한 값
+
+### VTCM 구성
+
+VTCM 하나(8 MiB)를 콜마다 용도에 맞게 다시 나눠 씀. 배치는 kernel이 콜 시작 때 shape으로 계산함
+(`hexkl_mm_u8i4_moe_layout`). 아래 크기는 Gemma4 shape을 넣어 계산한 값
+
+prefill MoE 콜 (64행 블록 단위)
+
+```
+VTCM 8 MiB
+├─ activation 64행 블록 ──── 176 KiB   64 × 2816 u8 (HMX 타일 순서)
+├─ gate_up weight ────────── 1.89 MiB  int4로 펼친 상태
+├─ down weight ───────────── 0.95 MiB
+├─ gate 버퍼 ─────────────── 176 KiB   64 × 704 f32, silu(gate)·up 결과 (up은 따로 안 만듦)
+├─ mid 버퍼 × 2 ──────────── 88 KiB    down 입력 u8, 블록 n / n+1 교대
+├─ acc staging × 2 ───────── 512 KiB   32 tile × 8 KiB, HMX가 하나 채우는 동안 HVX가 다른 하나 dequant
+├─ down staging ring × 4 ─── 1 MiB
+│                             ── 합계 약 4.77 MiB
+├─ Hadamard HMX 모드일 때 ── 328 KiB
+└─ HMX config (맨 위)
+```
+
+- weight는 2벌 안 둠 → 시간차 재사용
+  - expert e의 down 계산 중 → 이미 다 쓴 gate_up 영역에 e+1의 gate_up DMA
+  - 이유 : LFM2 shape에서 2벌이면 10.5 MB > VTCM arena 8.3 MB (Gemma4 shape이면 2벌도 계산상 들어가지만 같은 kernel이라 구조는 동일)
+- weight는 32 column tile 단위 chunk로 DMA → 첫 chunk 도착하면 HMX 시작 (계산상 gate_up 2 chunk, down 3 chunk)
+- 2-bit QS2 : 2-bit 코드를 int4 자리의 위쪽 절반에 DMA → 그 자리에서 int4로 펼침 (추가 VTCM 없음, DMA 바이트 절반)
+- TL2 : native panel을 DMA → int4 WH로 펼침 (VTCM 여유 있으면 panel을 연속으로 받아 둠)
+
+decode MoE 콜 (M=1, VTCM feed)
+
+```
+VTCM 8 MiB
+├─ slab G0 ───────── 968 KiB   expert 0, 2, 4, 6의 gate_up
+├─ slab G1 ───────── 968 KiB   expert 1, 3, 5, 7의 gate_up
+│                     gate_up 다 쓰면 slab 하나에 down 2개씩 (down j → slab (j>>1)&1, 반쪽 j&1)
+├─ TL2 LUT ───────── gate_up 59 KiB + down 15 KiB × 8
+└─ 나머지 미사용
+```
+
+- slab 크기 = int4 gate_up의 절반 (2-bit / TL2는 packed 그대로 올리고 int4로 안 펼침)
+  - TL2 실제 크기 gate_up 811 KiB, down 413 KiB → slab 안에 들어감
+  - 28/29층 affine 4-bit expert면 slab 1.89 MiB
+- expert i 계산하는 동안 다음 expert를 DMA → double buffering
+- DMA는 queue 4개로 나눠 보냄 (queue 1개 28~34 GB/s → 4개 62 GB/s)
+
+그 밖의 콜
+
+| 콜 | VTCM 사용 |
+|---|---|
+| decode FC (qkv, o proj, dense FFN) | lane마다 VTCM을 나눠 갖고, 각자 block 4개를 두 버퍼로 교대 (block b 계산 중 b+1 DMA) |
+| lm_head | slice 1개 ≤ 6 MiB (4096열 × 2816 int4 = 5.5 MiB), 64 slice |
+| prefill attention | head 하나의 K^T / V 타일 상주, score는 VTCM 안에서 softmax까지, Q는 다음 블록 미리 DMA |
+| prefill FC | weight slice (K ≥ 4096이면 1 MiB) + VTCM에 맞는 행 수만큼씩 나눠서 처리 |
 
 ---
 
