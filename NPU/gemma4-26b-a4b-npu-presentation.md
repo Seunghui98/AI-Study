@@ -48,9 +48,14 @@ expert
 - RMSNorm 9개 중 7개를 matmul 콜 안으로
   - 기존 : DSP 콜 사이마다 CPU가 activation 전체를 다시 훑음 (512토큰에서 약 300 ms)
 - o proj + residual_add / MoE + post-FFN norm + add 를 각각 한 콜로
-  - 각각 30콜 감소, staging 7.2 → 6.2 GB, 5.56 → 4.9 GB
-- skel 안에서 VTCM 크기만큼 행을 나눠서 돌기
-  - p2048 qkv 65 → 35콜, o proj 95 → 60콜
+  - 기존 : 콜이 나뉘어 있어서 중간 결과(1024행 × 2816 f32 = 11.5 MB)가 host로 돌아왔다가 다음 콜 입력으로 다시 ION staging 버퍼에 복사됨
+  - 각각 30콜 감소 (layer당 1콜 × 30 layer)
+  - prefill 1번 동안 host ↔ ION staging 복사량 : MoE 쪽 7.2 → 6.2 GB, o proj 쪽 5.56 → 4.9 GB (복사 시간 426 → 368 ms)
+- 행 chunk 분할을 host가 아니라 skel(DSP) 안에서
+  - 기존 : VTCM에 한 번에 안 들어가는 행 수면 host가 2048행 layer를 2~4콜로 나눠 보냄
+  - FastRPC는 인자로 넘긴 버퍼 전체를 매 콜마다 map/sync (실제 쓰는 길이와 무관하게 MiB당 약 27 us → qkv 콜 하나에 4.3 ms, o proj 2.2 ms)
+  - 변경 : host는 1콜만 보내고, skel이 VTCM(weight double buffer 옆)에 들어가는 행 수만큼씩 직접 loop
+  - p2048 qkv 65 → 35콜 (host 시간 638 → 506 ms), o proj 95 → 60콜 (410 → 291 ms)
 
 S25U, 1024토큰 : 4,791 ms → 3,808 ms
 
