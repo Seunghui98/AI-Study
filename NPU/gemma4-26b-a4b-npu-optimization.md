@@ -359,7 +359,97 @@ expert pool을 18개 늘리면 decode가 10.1 → 13.9 tok/s가 되고 arena를 
 
 ---
 
-## 7. 숫자에 영향을 준 정확도 수정
+## 7. Prefetch / double buffering 적용 현황
+
+최근 MoE NPU 논문들에서 많이 쓰는 "다음 expert prefetch"와 "double buffering"이 우리에게도
+들어가 있는지 정리한다. 결론은 둘 다 들어가 있다. 다만 두 층에서 따로 일어나고, 그중
+파일 → DRAM 층은 논문들과 흐름이 다르다.
+
+| 층 | 무엇을 옮기나 | 우리 방식 | 논문과 비교 |
+|---|---|---|---|
+| DDR → VTCM | 가중치/활성 타일 | DMA로 한 단계 앞서 올리고 계산과 겹침 | 거의 같음 (VTCM 8 MB 때문에 shape별로 다르게 씀) |
+| 파일 → DRAM slot | expert 가중치 | prefill은 예측 없이 남은 layer 전부 미리 읽기, decode는 다음 layer router로 예측해서 미리 읽기 | 예측 아이디어는 같은 계열, 비용 구조는 다름 |
+
+### 7.1 DSP 안: DDR → VTCM double buffering
+
+- **decode MoE (VTCM feed)**: VTCM에 gate_up 크기 slab 두 개(G0/G1)를 두고 expert i의
+  gate_up을 slab `i & 1`에 넣는다. DMA가 다음 expert를 올리는 동안 HVX GEMV는 현재 expert를
+  계산한다. DMA는 queue 4개로 나눠서 보낸다(queue 하나 28~34 GB/s, 넷이면 62 GB/s).
+  LFM2 기준 decode +30%.
+- **decode FC**: lane마다 자기 VTCM 영역에서 "block b 대기 → block b+1 push → block b 계산"으로
+  돈다. 각 lane의 첫 block 전송(slice의 약 1/4)은 숨겨지지 않는다.
+- **prefill MoE**: 가중치는 일부러 double buffering하지 않는다(`hexkl_mm_u8i4_moe.c` 첫 주석
+  "THE WEIGHTS ARE NOT DOUBLE-BUFFERED"). gate_up과 down을 두 벌씩 두면 10.5 MB인데 VTCM
+  arena는 8.3 MB다. 대신 버퍼를 시간차로 재사용한다. expert e의 down이 도는 동안 이미 다 쓴
+  gate_up 버퍼에 e+1의 gate_up을 당겨 온다. 활성 쪽은 accumulator staging 버퍼 두 개를 번갈아
+  쓰고, block n의 down을 block n+1의 gate_up 다음에 issue해서 HMX가 쉬지 않게 한다
+  (software pipelining).
+- **prefill attention**: Q를 한 iteration 앞서 DMA로 올리고, 다음 KV head 타일은 VTCM에
+  두 벌이 들어갈 때만 미리 올린다.
+
+이 층은 논문들이 말하는 double buffering과 같은 것이라고 말해도 된다.
+
+### 7.2 파일 → DRAM: expert prefetch
+
+**prefill은 예측하지 않는다.** 1024행 이상이면 layer마다 사실상 모든 expert가 쓰이므로,
+맞힐 필요 없이 남은 layer의 expert를 reader thread가 차례로 읽어 둔다. horizon은 남은 전체
+layer이고, 계산이 끝난 layer의 expert만 evict한다.
+
+| 커밋 | 내용 | 효과 |
+|---|---|---|
+| d374050 | read-ahead 기본 on (depth 4, reader 4) | (LFM2) cold prefill 2318 → 935 ms |
+| 3a7671e | horizon을 남은 전체 layer로 (depth 4로는 C=16에서 preload 뒤 layer를 layer 7이 돼서야 queue) | (LFM2, C=16) 변경 전 cold prefill 799 ms, 하한 약 0.68 s. 변경 후 수치는 없음 |
+| 5870fd1 | pool에 일부만 들어가면 layer를 일부라도 queue | C=12에서 1024토큰당 5~141 ms 노출되던 대기 제거 |
+| 725b05a | reader 4 → 6 | 1090토큰 1,747 → 1,698 ms (median) |
+
+**decode는 예측해서 읽는다** (8dfc03b, `htp_router_predict.h`, `htp_expert_prefetch.h`).
+
+1. DSP가 layer L을 돌리는 도중에 router 입력 행을 mailbox에 올린다.
+2. ARM이 그 행에 layer L+1의 router 가중치를 곱해 top-k를 예측한다. 직전 토큰에서 잰
+   layer 간 residual 변화량을 0.5 비율로 더해 보정한다(PREFETCH_RESIDUAL 0.5).
+3. rank별 적중률(confidence)로 예측을 한 번 거르고, pool에 없는 expert만 reader 4개가
+   여분 DMA slot 32개에 읽는다.
+4. 실제 routing에서 miss가 나면 registration RPC 없이 slot만 교환한다. 실제 routing은 항상
+   DSP 결과이고, 예측은 I/O 힌트로만 쓴다.
+
+"다음 layer의 gate를 현재 hidden에 미리 적용한다"는 점에서 Pre-gated MoE, EdgeMoE 계열과
+같은 아이디어다. 현재는 router가 Gemma의 softmax router일 때만 켜진다(PREDICT=2).
+
+### 7.3 논문들과 다른 점
+
+1. **모바일은 unified memory다.** 논문들은 CPU 메모리나 SSD에서 가속기 메모리로 옮기는
+   전송(PCIe 등)을 숨기는 경우가 많다. 우리는 NPU와 CPU가 같은 DRAM을 쓰기 때문에 비용이
+   flash read(reader들이 약 3 GB/s 하나를 나눠 씀)와 FastRPC 등록이다. 그래서 효과가 컸던 건
+   swap 여러 개를 RPC 하나로 묶기, slot 제자리 rebind, 등록 없는 slot 교환 같은 RPC 줄이기였다.
+   LFM2 측정에서 miss 하나가 read 0.39 ms + FastRPC 0.25 ms였고, RPC가 miss 비용의 40%였다.
+2. **진짜 제약은 PD 매핑 한도 3,840 MiB다.** prefetch slot도 이 안에 있어야 한다. 그래서 slot을
+   prefetch에 쓰는 것보다 상주 expert를 늘리는 쪽이 훨씬 효과가 컸다(pool growth로
+   10.40 → 13.07 tok/s).
+3. **miss를 토큰 안에서 겹친다.** miss가 나면 DSP는 이미 가진 expert부터 계산하고, 그동안
+   ARM이 빠진 expert를 읽고, DSP가 그 slot을 제자리에서 rebind한다. 논문들의 expert 단위
+   pipelining과 비슷한 효과다.
+
+### 7.4 예측 prefetch의 실제 효과
+
+| 시도 | 결과 |
+|---|---|
+| DSP가 예측을 올리고 ARM이 page cache만 데움 (533b4df, S25, C=32) | miss 50개 중 29개를 미리 읽었는데 miss 대기 29.0 → 30.3~31.1 ms, decode 11.4 → 10.6 tok/s. 예측용 router 계산 자체가 비쌌다. 기본 off |
+| ARM 예측 + DMA slot 직접 read-ahead (f6e16d3에서 빌트인) | DMA queue 4개, prefill scratch 해제, 8 thread와 묶여서 9.6~10.0 → 10.3~10.6 tok/s (C16 p1024). 예측 하나만 뗀 측정은 없음 |
+| prefetch reader 8개 (a7b5ad5) | 편차 범위 안 |
+| TL2 gate/up + down을 aligned read 하나로, 낡은 예측 읽기 취소 (9f7f633) | expert 대기 24.74 → 22.62 ms/token, 11.9640 → 12.5731 tok/s |
+
+expert 대기는 여전히 토큰당 약 22.6 ms 남아 있다(TL2 pack, p2048).
+
+### 7.5 설명할 때
+
+"VTCM 수준의 double buffering과 다음 layer expert 예측 prefetch가 적용돼 있다"고 말해도 된다.
+다만 "decode 속도 향상의 주원인이 예측 prefetch"라고 하면 과장이다. decode를 실제로 올린 건
+PD 한도 안에서 상주 expert를 늘린 것과 weight를 작게 만든 것(TL2)이고, prefetch는 miss 대기를
+일부 숨기는 보조 역할이다.
+
+---
+
+## 8. 숫자에 영향을 준 정확도 수정
 
 최적화 중에 잡은 버그 중 앞뒤 수치를 해석할 때 알아야 하는 것들이다.
 
@@ -380,9 +470,9 @@ expert pool을 18개 늘리면 decode가 10.1 → 13.9 tok/s가 되고 arena를 
 
 ---
 
-## 8. 정리와 남은 과제
+## 9. 정리와 남은 과제
 
-### 8.1 무엇이 가장 효과가 컸나
+### 9.1 무엇이 가장 효과가 컸나
 
 Prefill
 1. 층을 다 DSP로 옮기고 호출을 합친 것 (fusion) — 1024토큰 4.8 s → 3.8 s (S25)
@@ -399,7 +489,7 @@ Decode
 4. 첫 토큰 setup — 1,463 → 506 ms
 5. weight를 TL2로 (읽는 바이트 감소) — 11.8 → 15.5 tok/s
 
-### 8.2 참고: 같은 SoC의 GPU(Adreno 840) 경로
+### 9.2 참고: 같은 SoC의 GPU(Adreno 840) 경로
 
 같은 PR에 들어 있는 OpenCL 시리즈(다른 작업자)의 Gemma4 26B-A4B 수치다. expert가 TQ2CX
 ternary라 weight pack이 다르므로 직접 비교는 아니고 참고용이다.
@@ -413,7 +503,7 @@ ternary라 weight pack이 다르므로 직접 비교는 아니고 참고용이�
 prefill은 NPU가 확실히 빠르고, decode는 현재 GPU가 더 빠르거나 비슷하다. 발표할 때
 "NPU가 전부 빠르다"고 하면 안 되고, prefill과 메모리에서 이점이 있다고 말하는 게 맞다.
 
-### 8.3 남은 것
+### 9.3 남은 것
 
 - **decode 16 tok/s 목표**: 10/15 decode 개선 시리즈에서 목표 미달로 기록. strict pack에서는
   19.54지만 pack이 다르다.
@@ -457,5 +547,6 @@ prefill은 NPU가 확실히 빠르고, decode는 현재 GPU가 더 빠르거나 
 | 첫 토큰 | fa65875, 88d9e26, b75c52e, 8baddef, 7ed20de, 4e307ef |
 | decode attention | edaec7c, 5264090, eb3091e, 09ebaf3, 46fb91b, 0428a51 |
 | expert cache | 1067f41, 961d193, 8dee795, 0d62d96, 690b62d, 9f7f633, 5124689, b35c5a6 |
+| prefetch / double buffering | 434e262, 8f1ad33, 74a24db, 8dfc03b, 533b4df, d374050, 3a7671e, 5870fd1, 725b05a, f6e16d3 |
 | lm_head | d21823f, 1b541fd |
 | 메모리 | a4ed73b, 4db63d0, 63574cc, 74e590c, c75e1b8 |
