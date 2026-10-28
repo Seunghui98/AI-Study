@@ -40,9 +40,8 @@ QS2 (2-bit)   : weight 하나 = 2 bit 번호 (00/01/10/11)
 
 TL2 (ternary) : weight 하나 = -1 / 0 / +1 셋 중 하나
                 값이 정해져 있어서 변환표 없음, 커널이 바로 읽음
-                값 3개는 log2(3) = 1.58 bit면 되는데 2 bit를 쓰면 4가지 중 1가지가 빈 칸
-                → weight 3개를 묶어 5 bit에 (3³ = 27가지 ≤ 32) = 1.67 bit
-                   5 bit = 크기 4 bit (0~13) + 부호 1 bit
+                2 bit는 칸이 4개인데 값은 3개 → 칸 1개가 늘 빔
+                → weight 3개를 한 묶음으로 : 경우의 수 27가지 → 5 bit(32칸)면 충분 → 1개당 1.67 bit
 ```
 
 - QS2 pack (10/13) : 원본 google checkpoint를 4개 값으로 양자화해서 만든 것
@@ -201,6 +200,43 @@ expert 1개 크기는 2장 표 참고
 
 - prefill / 메모리 : NPU 우위
 - decode : GPU가 빠르거나 비슷
+
+---
+
+## 7. Long context (agent 시나리오)
+
+- 시나리오 : 바뀌지 않는 긴 앞부분(system prompt, tool 선언) + 짧은 요청
+  - sub agent 1,537 + 16 토큰 / main agent 23,063 + 6,641 토큰 (context 30k)
+- 문제
+  - KV cache를 층마다 max_seq_len으로 잡으면 30k에서 6.5 GB
+  - full attention 층이 4,096열을 넘으면 느린 fp16 경로로 떨어짐
+  - 긴 앞부분을 요청마다 다시 prefill
+
+처리
+
+| 방법 | 내용 | 효과 |
+|---|---|---|
+| 층별 KV 크기 | sliding 25층은 window 1024 + chunk 2048 = 3,072행만, full 5층만 전체 길이 | 30k KV 6.5 GB → 495 MB |
+| chunk prefill | 2,048행씩 나눠 prefill, chunk 사이에 sliding window를 앞으로 당김(compaction) | 20k 이상 prefill 가능 |
+| attention 커널 | 4,096열 넘으면 segment로 나눠 계산 후 softmax merge | 22k+6k prefill 69.5 → 39.9 s |
+| KV snapshot | 앞부분을 한 번 prefill해 파일로 저장(.kv + scale .q2) → 실행 때 load 후 뒷부분만 prefill | load 200 ms (6k) / 292~684 ms (23k) |
+| window cache 정확도 | decode scale이 seed 행 기준이라 window만 seed하면 full cache와 달라짐 → 버린 행의 최댓값을 같이 넘김 | max_seq_len과 무관하게 같은 출력 |
+| 입력 검사 | prefix + 프롬프트 + 생성 길이 > max_seq_len이면 prefill 전에 거부 | RoPE 범위 초과로 죽던 것 방지 |
+
+결과
+
+| 조건 | prefill | decode |
+|---|---|---|
+| S26U, 19,270토큰 한 번에 (C=8) | 385~394 TPS | 7.3~7.9 TPS |
+| S26U, 22k cached + 6k 새 토큰 | 39.9 s (152 TPS) | 토큰당 155 ms |
+| S25U, 23k 저장 → 6,641 prefill (chunk 4개) | 21.9~25.0 s (266~304 TPS) | 6.6 TPS |
+| 참고 2k | 700 TPS | 13~15 TPS |
+
+- 긴 context에서 느려지는 이유 : full attention 5층이 context 전체를 봄 (30k prefill 25 s 중 full 층 attention 7.5 s, decode는 attention이 51%)
+- 남은 것
+  - full 층 KV는 아직 max_seq_len에 비례해 load 때 할당 (30,272에서 peak 5.25 GB)
+  - prefill 중 host fp16 KV 사본 약 1.2 GB (decode 시작 때 해제)
+  - 30k에서는 expert cache C=8, pool 확장 off 필요 (DSP 매핑 공간을 KV가 씀)
 
 ---
 
