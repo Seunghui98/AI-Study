@@ -141,11 +141,27 @@ Attention
 - KV cache int8 + 정수 연산 attention
 - 토큰당 attention 20.9 → 6.7 ms (S25U → S26U)
 
-expert cache (decode 시간 대부분 = expert weight 읽기)
-- 첫 토큰 후 남는 메모리로 상주 expert 16 → 최대 34개 : 10.4 → 13.1 TPS
-- expert 교체 정책 LRU → LRFU
-- 다음 layer expert 예측 prefetch (보조, 단독 효과 작음)
-- weight 2-bit → ternary(1.67 bit) : 읽는 양 감소, 11.8 → 15.5 TPS
+expert cache
+- 구조 : 층마다 expert 128개 중 16개만 DSP 메모리에 상주 (C=16), 나머지는 flash
+- 토큰마다 층당 8개 선택 → 상주에 없으면 miss → flash에서 읽을 때까지 대기
+- decode 시간의 대부분이 이 miss 대기 (TL2 p2048 : 토큰당 22.6 ms)
+
+```
+토큰 1개의 한 층
+DSP  : router → 8개 중 5개 있음 → 5개 먼저 계산 ─────────────▶ 나머지 3개 계산
+ARM  :                  miss 3개 받음 → flash에서 읽어 빈 slot에 ─┘
+```
+
+- 줄인 것
+
+| 방법 | 효과 |
+|---|---|
+| 상주 수 늘리기 : 첫 토큰 후 prefill 버퍼가 비운 자리에 16 → 최대 34개 | 10.4 → 13.1 TPS |
+| 교체 정책 LRU → LRFU (최근 + 빈도) | 10.8 → 11.9 TPS (C=32) |
+| expert 크기 줄이기 : 2-bit → ternary | 11.8 → 15.5 TPS |
+| 다음 층 expert 예측해서 미리 읽기 | 보조 (단독 수치 없음) |
+
+- 결론 : 커널보다 "몇 개를 올려 둘 수 있나"가 decode 속도를 정함 → 메모리 절감이 곧 decode 성능
 
 ---
 
