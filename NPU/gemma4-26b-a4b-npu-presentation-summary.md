@@ -38,7 +38,7 @@ device : S26U (Hexagon v81) / 일부 S25U
 |---|---|---|
 | expert | 2-bit 코드 + int4 palette | ternary, 1.67 bit |
 | FC / head | int4 (QS4CX) | int4 affine |
-| pack 크기 | 7.5 GB (7.0 GiB) | 6.6 GB (6.2 GiB) |
+| pack 크기 | 7.0 GiB | 6.2 GiB |
 | expert 1개 | 1.45 MiB | 1.23 MiB |
 | decode 토큰당 읽는 양 (240 expert) | 349 MiB | 295 MiB |
 
