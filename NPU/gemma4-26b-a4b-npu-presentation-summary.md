@@ -31,17 +31,17 @@ device : S26U (Hexagon v81) / 일부 S25U
 
 ## 2. Expert weight 포맷 : 2-bit → ternary
 
-- expert weight를 2 bit에서 ternary(-1/0/+1) packing, weight 1개당 평균 1.67 bit로
+- 두 pack 모두 expert 값은 ternary(-1/0/+1), 저장(packing) 방식만 다름 : 1개당 2 bit → 평균 1.67 bit
 - decode는 expert weight 읽기가 병목(memory bound) → 읽는 양이 줄어 성능 개선
 
 QS2 pack (2 bit)
-- weight 하나 = 2 bit 번호 (00/01/10/11) → 변환표(tensor마다 int4 값 4개)로 값을 읽음
-- 원본 google checkpoint를 4개 값으로 양자화해서 만든 pack
+- weight 하나 = 2 bit 번호 (00/01/10/11) → 변환표로 값을 읽음
+- 범용 2-bit 포맷 (int4 값 4개를 표에 둠) → ternary는 표에 {-7, 0, +7}만 쓰고 1칸은 빔, scale은 1/7배
 
 TL2 pack (ternary)
 - weight 하나 = -1 / 0 / +1 셋 중 하나 → 변환표 없이 커널이 값을 바로 읽음
 - 2 bit는 칸이 4개인데 값은 3개라 1칸이 늘 빔 → weight 3개를 묶어 5 bit에 (27가지 ≤ 32칸) = 1개당 1.67 bit
-- 처음부터 ternary로 양자화된 checkpoint(AIMET)를 pack한 것 → QS2 pack과는 checkpoint도 다름
+- ternary 전용 포맷 : 표 없음, 1/7 보정 없음
 
 | | QS2 pack | TL2 pack |
 |---|---|---|
