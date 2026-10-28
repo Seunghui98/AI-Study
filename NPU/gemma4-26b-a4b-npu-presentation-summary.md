@@ -211,6 +211,14 @@ expert 1개 크기는 2장 표 참고
 | window cache 정확도 | decode scale이 seed 행 기준이라 window만 seed하면 full cache와 달라짐 → 버린 행의 최댓값을 같이 넘김 | max_seq_len과 무관하게 같은 출력 |
 | 입력 검사 | prefix + 프롬프트 + 생성 길이 > max_seq_len이면 prefill 전에 거부 | RoPE 범위 초과로 죽던 것 방지 |
 
+왜 2,048행 chunk로 나누나
+- 메모리 : prefill 버퍼(activation, staging, DSP scratch)가 한 번에 넣는 행 수에 비례
+  - 예 : qkv 출력 버퍼 2,048행에서 128 MiB, MoE scratch도 행 수 비례
+  - 행을 늘리면 DSP 매핑 한도(3,840 MiB)를 expert cache와 나눠 써야 해서 OOM 또는 C를 낮춰야 함 (4,096행 한 번에 : C=24로 낮춰야 돎)
+- KV cache : sliding 층 cache = window 1,024 + chunk 1개 2,048 = 3,072행 → chunk 크기가 곧 sliding cache 크기
+- 속도 : 2,048행이면 NPU가 이미 포화 (1K 627 → 2K 700 TPS, 더 키워도 이득 작음)
+→ chunk 크기를 고정하면 prompt 길이와 무관하게 prefill 메모리가 일정
+
 결과
 
 | 조건 | prefill | decode |
