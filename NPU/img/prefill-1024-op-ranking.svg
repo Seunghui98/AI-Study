@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="660" viewBox="0 0 960 660">
+<rect width="960" height="660" fill="#fcfcfb"/>
+<text x="24" y="34" font-size="18" font-weight="700" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">Gemma4-26B-A4B prefill 1024토큰 : attention 시간과 연산별 순위</text>
+<text x="24" y="70" font-size="15" font-weight="600" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">A. attention 블록 시간 (30 layer 합, 1024토큰)</text>
+<text x="24" y="88" font-size="11.5" fill="#52514e" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">CPU 기준 대비 약 11배 · 이후 커밋(calibration DSP 이동, KV 등록 124 ms 제거)은 수치 미기록</text>
+<line x1="324.0" y1="104" x2="324.0" y2="250" stroke="#e6e4df" stroke-width="1"/>
+<text x="324.0" y="264" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">0</text>
+<line x1="404.6" y1="104" x2="404.6" y2="250" stroke="#e6e4df" stroke-width="1"/>
+<text x="404.6" y="264" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">500</text>
+<line x1="485.2" y1="104" x2="485.2" y2="250" stroke="#e6e4df" stroke-width="1"/>
+<text x="485.2" y="264" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">1,000</text>
+<line x1="565.9" y1="104" x2="565.9" y2="250" stroke="#e6e4df" stroke-width="1"/>
+<text x="565.9" y="264" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">1,500</text>
+<line x1="646.5" y1="104" x2="646.5" y2="250" stroke="#e6e4df" stroke-width="1"/>
+<text x="646.5" y="264" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">2,000</text>
+<line x1="727.1" y1="104" x2="727.1" y2="250" stroke="#e6e4df" stroke-width="1"/>
+<text x="727.1" y="264" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">2,500</text>
+<line x1="807.8" y1="104" x2="807.8" y2="250" stroke="#e6e4df" stroke-width="1"/>
+<text x="807.8" y="264" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">3,000</text>
+<text x="840" y="278" font-size="10" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">ms</text>
+<text x="314" y="122.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">CPU attention (mha_core)</text>
+<text x="314" y="134.95999999999998" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">자체 측정값 (PR 기록 아님)</text>
+<rect x="324" y="110" width="482.3" height="18" rx="3" fill="#b9b7b0"/>
+<text x="814.3" y="122.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">2,991</text>
+<text x="314" y="150.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">NPU attention, 10/08</text>
+<text x="314" y="162.96" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">S25U · host 쪽 비용 포함</text>
+<rect x="324" y="138" width="124.8" height="18" rx="3" fill="#2a78d6"/>
+<text x="456.8" y="150.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">774</text>
+<text x="314" y="178.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">+ KV cache 등록을 load로</text>
+<text x="314" y="190.96" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">S25U · 10/08</text>
+<rect x="324" y="166" width="108.5" height="18" rx="3" fill="#2a78d6"/>
+<text x="440.5" y="178.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">578 ~ 673</text>
+<text x="314" y="206.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">+ KV append 양자화 HVX 병렬화</text>
+<text x="314" y="218.96" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">S25U · 10/08</text>
+<rect x="324" y="194" width="80.1" height="18" rx="3" fill="#2a78d6"/>
+<text x="412.1" y="206.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">425 ~ 497</text>
+<text x="314" y="234.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">+ Q 양자화를 DSP로, u16 context</text>
+<text x="314" y="246.96" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">S26U · 10/10</text>
+<rect x="324" y="222" width="43.2" height="18" rx="3" fill="#2a78d6"/>
+<text x="375.2" y="234.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">268  (DSP 콜 약 207)</text>
+<text x="24" y="284" font-size="10.5" fill="#52514e" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">주의 : 2,991 ms는 PR 커밋에 없는 자체 측정값이고, NPU 수치는 S25U(10/08)와 S26U(10/10)가 섞여 있음</text>
+<text x="24" y="328" font-size="15" font-weight="600" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">B. 연산별 호스트 시간 순위 (1024토큰, 30 layer 합)</text>
+<text x="24" y="346" font-size="11.5" fill="#52514e" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">서로 다른 커밋의 측정값을 모은 것 · 한 번의 실행에서 잰 분해가 아님</text>
+<line x1="324.0" y1="362" x2="324.0" y2="564" stroke="#e6e4df" stroke-width="1"/>
+<text x="324.0" y="578" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">0</text>
+<line x1="438.7" y1="362" x2="438.7" y2="564" stroke="#e6e4df" stroke-width="1"/>
+<text x="438.7" y="578" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">200</text>
+<line x1="553.3" y1="362" x2="553.3" y2="564" stroke="#e6e4df" stroke-width="1"/>
+<text x="553.3" y="578" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">400</text>
+<line x1="668.0" y1="362" x2="668.0" y2="564" stroke="#e6e4df" stroke-width="1"/>
+<text x="668.0" y="578" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">600</text>
+<line x1="782.7" y1="362" x2="782.7" y2="564" stroke="#e6e4df" stroke-width="1"/>
+<text x="782.7" y="578" font-size="10" fill="#52514e" text-anchor="middle" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">800</text>
+<text x="840" y="592" font-size="10" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">ms</text>
+<text x="314" y="380.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">MoE expert FFN</text>
+<text x="314" y="392.96" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">10/10 · 2-bit · 이후 10/11 커밋으로 추가 단축</text>
+<rect x="324" y="368" width="448.9" height="18" rx="3" fill="#2a78d6"/>
+<text x="780.9" y="380.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">783  (DSP 26.1 ms × 30)</text>
+<text x="314" y="408.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">dense FFN</text>
+<text x="314" y="420.96" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">S25U 10/08 (S26U 수치 없음)</text>
+<rect x="324" y="396" width="223.0" height="18" rx="3" fill="#2a78d6"/>
+<text x="555.0" y="408.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">389</text>
+<text x="314" y="436.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">attention</text>
+<text x="314" y="448.96" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">10/10</text>
+<rect x="324" y="424" width="153.7" height="18" rx="3" fill="#2a78d6"/>
+<text x="485.7" y="436.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">268</text>
+<text x="314" y="464.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">qkv projection (+norm, RoPE)</text>
+<text x="314" y="476.96" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">10/10</text>
+<rect x="324" y="452" width="140.5" height="18" rx="3" fill="#2a78d6"/>
+<text x="472.5" y="464.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">245</text>
+<text x="314" y="492.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">o projection (+residual)</text>
+<text x="314" y="504.96" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">10/11</text>
+<rect x="324" y="480" width="98.6" height="18" rx="3" fill="#2a78d6"/>
+<text x="430.6" y="492.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">172</text>
+<text x="314" y="520.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">router (+norm, softmax, top-k)</text>
+<text x="314" y="532.96" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">10/10</text>
+<rect x="324" y="508" width="86.6" height="18" rx="3" fill="#2a78d6"/>
+<text x="418.6" y="520.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">151</text>
+<text x="314" y="548.96" font-size="12" fill="#0b0b0b" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">staging memcpy</text>
+<text x="314" y="560.96" font-size="9.5" fill="#52514e" text-anchor="end" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">10/11</text>
+<rect x="324" y="536" width="12.6" height="18" rx="3" fill="#2a78d6"/>
+<text x="344.6" y="548.96" font-size="12" fill="#0b0b0b" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">22</text>
+<text x="24" y="598" font-size="10.5" fill="#52514e" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">주의 : 막대 합계(약 2,030 ms)는 같은 시기 prefill 총시간(1,718~1,943 ms, 10/11)과 맞지 않음. 순위와 크기 감만 참고</text>
+<text x="24" y="612" font-size="10.5" fill="#52514e" font-family="Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, Helvetica, Arial, sans-serif">출처 : 950a0ce, 43290a3, cc7a637, 7703461, a9842cd, 141d1b1, 6bd991e (nntrainer PR #4428)</text>
+</svg>

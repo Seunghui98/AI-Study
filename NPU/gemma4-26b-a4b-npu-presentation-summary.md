@@ -29,7 +29,58 @@ device : S26U (Hexagon v81) / 일부 S25U
 
 ---
 
-## 2. Prefill
+## 2. Weight 포맷 : 2-bit → ternary
+
+pack 변천
+
+| 시기 | expert | FC / head | embedding | pack 크기 |
+|---|---|---|---|---|
+| 10/13 QS2 pack | QS2CX_WH (2-bit 코드 + int4 4-level palette) | QS4CX (int4 + 열별 scale) | Q4_0 | 7.5 GB |
+| 10/15 TL2 pack | TL2CX_WH (ternary -1/0/1, 1.67 bit) | QS4CX_WH_AFFINE (int4 + scale + offset) | Q4_0 | 6.6 GB |
+| 10/16 rotated | TL2 + online Hadamard 회전 | affine | Q4_0 | |
+| 10/20 strict | TL2 + Paley-I 회전, static activation 사이드카 | affine | U4 asym | |
+
+ternary (TL2CX_WH)
+- 값 3개(-1, 0, 1) → (24 × 128) weight 블록을 640 byte에 pack → 1.67 bit/weight
+- 레코드 = packed 코드 + N개 fp32 scale + N개 fp32 column sum (palette, scale/7 없음)
+- prefill : VTCM에서 int4 WH로 펼쳐서 HMX
+- decode : packed 그대로 HVX LUT GEMV (펼치지 않음, 읽는 바이트 그대로 절반 이하)
+- 28/29층은 recipe상 4-bit affine 컨테이너 → 값은 ternary라 전부 TL2로 바꿔도 동일
+  - arena 2,624 → 1,792 MiB, peak 4,723 → 3,669 MB, prefill 577 → 613 TPS, decode 11.8 → 15.5 TPS
+
+affine (QS4CX_WH_AFFINE)
+- w = scale × (q + offset) → BF16 원본 값을 그대로 복원 (대칭 min/max 재양자화 없음)
+- kernel이 offset × Σ(u8 - zp) 보정을 accumulator에 더함
+
+expert 1개 크기 (gate_up 2816 → 1408, down 704 → 2816)
+
+| 포맷 | gate_up | down | slot |
+|---|---|---|---|
+| BF16 | 7.56 MiB | 3.78 MiB | 11.3 MiB |
+| int4 affine | 1.89 MiB | 0.95 MiB | 3.0 MB |
+| 2-bit QS2 | 0.95 MiB | 0.47 MiB | 1.45 MiB |
+| ternary TL2 | 811 KiB | 413 KiB | 1.23 MiB |
+
+- decode 토큰당 expert 240개 읽음 → QS2 349 MiB / TL2 295 MiB
+- 참고 LFM2 expert (int4) 5.25 MiB
+
+WH 레이아웃
+- 변환기가 HMX 타일 순서(WH)로 미리 써 둠 → load는 읽기만
+- load 때 변환하면 157 MB/s → 모델 하나에 25 s
+
+rotated checkpoint
+- weight가 미리 Hadamard 회전된 상태 → 런타임이 expert 입력에 같은 회전 적용 (gate/up H44×H64, down H44×H16)
+- 회전 sign은 rotation_signs.json (seed에서 재생성, 2816 + 704개)
+- decode HVX FP32 / prefill HMX FP16
+- strict pack은 Paley-I 기저 → sign을 scalar로 곱하던 초기 구현이 prefill 353 TPS → HVX화로 683.70 TPS
+
+변환기
+- weight_converter.py : BF16 HF checkpoint → QS2 pack → convert_tl2_model → affine FC/head → rotation_signs.json 한 번에
+- 50 GB safetensors를 mmap 대신 pread (torch 불필요)
+
+---
+
+## 3. Prefill
 
 콜 수 줄이기 (fusion)
 - q/k/v → qkv 1콜, dense FFN 3개 → 1콜, norm / residual add는 앞 matmul 콜 안으로
@@ -60,7 +111,7 @@ Attention
 
 ---
 
-## 3. Decode
+## 4. Decode
 
 구조 : DSP 상주 그래프
 - decode step 전체(542 op)를 NPU에 그래프로 상주
@@ -84,7 +135,7 @@ expert cache (decode 시간 대부분 = expert weight 읽기)
 
 ---
 
-## 4. 메모리
+## 5. 메모리
 
 ```
 VTCM 8 MiB (prefill MoE)          VTCM 8 MiB (decode MoE)
@@ -95,7 +146,7 @@ VTCM 8 MiB (prefill MoE)          VTCM 8 MiB (decode MoE)
 └─ 합계 4.8 MiB
 ```
 
-expert 1개 : 1.45 MiB (2-bit) / 1.23 MiB (ternary) / 참고 LFM2 5.25 MiB
+expert 1개 크기는 2장 표 참고
 
 | 항목 | 전 | 후 |
 |---|---|---|
@@ -106,7 +157,7 @@ expert 1개 : 1.45 MiB (2-bit) / 1.23 MiB (ternary) / 참고 LFM2 5.25 MiB
 
 ---
 
-## 5. GPU 비교 (같은 칩, weight 포맷 다름)
+## 6. GPU 비교 (같은 칩, weight 포맷 다름)
 
 | | prefill 1K | decode | peak |
 |---|---|---|---|
