@@ -31,12 +31,16 @@ device : S26U (Hexagon v81) / 일부 S25U
 
 ## 2. Weight 포맷 : 2-bit → ternary
 
-- expert weight를 2-bit에서 ternary(-1/0/1, 1.67 bit)로 → 읽는 양이 줄어 decode가 빨라지고 메모리가 줄음
+- QS2 : 2-bit 코드가 int4 값 4개짜리 palette를 가리킴 (값은 4개 중 하나). 10/13 pack은 원본 checkpoint를 4 레벨로 양자화한 것
+- TL2 : 값이 -1/0/1 3개뿐인 ternary checkpoint를 palette 없이 1.67 bit로 바로 pack
+  - QS2 컨테이너에 ternary를 담을 수도 있음(palette 3개만 사용, 2 bit) → TL2는 같은 값을 더 촘촘히 담고 커널이 직접 읽음
 - FC / lm_head는 int4 affine (scale + offset) → BF16 원본 값을 그대로 복원
 
 | | QS2 pack (10/13) | TL2 pack (10/15~) |
 |---|---|---|
-| expert | 2-bit 코드 + int4 palette | ternary, 1.67 bit |
+| expert 값 | int4 중 4개 (palette) | -1 / 0 / 1 |
+| expert 저장 | 2 bit + palette | 1.67 bit, palette 없음 |
+| checkpoint | 원본 google BF16 | ternary로 미리 양자화된 BF16 (AIMET) |
 | FC / head | int4 (QS4CX) | int4 affine |
 | pack 크기 | 7.0 GiB | 6.2 GiB |
 | expert 1개 | 1.45 MiB | 1.23 MiB |
