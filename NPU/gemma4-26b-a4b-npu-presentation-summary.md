@@ -23,7 +23,7 @@ device : S26U (Hexagon v81) / 일부 S25U
 
 - 모델 > NPU 메모리
   - weight 6.2~7.0 GiB, NPU 매핑 한도 3.75 GiB (3,840 MiB)
-  - expert는 layer당 16개만 상주, 나머지는 flash에서 읽음
+  - expert는 layer당 16개만 상주(C=16), 나머지는 flash에서 읽음 (decode 중에는 첫 토큰 후 32개까지 늘림)
 - expert 수 : LFM2 대비 4배 (layer당 32 → 128개, top-8, 30 layer)
 - NPU 연산 증가 → FastRPC 콜 / 복사 비용이 matmul보다 커짐
 
@@ -130,7 +130,8 @@ Attention
 - 토큰당 attention 20.9 → 6.7 ms (S25U → S26U)
 
 expert cache
-- 구조 : 층마다 expert 128개 중 16개만 DSP 메모리에 상주 (C=16), 나머지는 flash
+- 구조 : 층마다 expert 128개 중 16개만 DSP 메모리에 상주 (설정 C=16), 나머지는 flash
+  - 첫 토큰이 나오면 prefill 버퍼가 비운 자리만큼 자동으로 늘림 → decode 중에는 층당 32개 (한도 34)
 - 토큰마다 층당 8개 선택 → 상주에 없으면 miss → flash에서 읽을 때까지 대기
 - decode 시간의 대부분이 이 miss 대기 (TL2 p2048 : 토큰당 22.6 ms)
 
@@ -144,7 +145,7 @@ ARM  :                  miss 3개 받음 → flash에서 읽어 빈 slot에 ─�
 
 | 방법 | 효과 |
 |---|---|
-| 상주 수 늘리기 : 첫 토큰 후 prefill 버퍼가 비운 자리에 16 → 최대 34개 | 10.4 → 13.1 TPS |
+| 상주 수 늘리기 : 첫 토큰 후 16 → 32개 (+16, arena 2,240 MiB) | 10.4 → 13.1 TPS |
 | 교체 정책 LRU → LRFU (최근 + 빈도) | 10.8 → 11.9 TPS (C=32) |
 | expert 크기 줄이기 : 2-bit → ternary | 11.8 → 15.5 TPS |
 | 다음 층 expert 예측해서 미리 읽기 | 보조 (단독 수치 없음) |
