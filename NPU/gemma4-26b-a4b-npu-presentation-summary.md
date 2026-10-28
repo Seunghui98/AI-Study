@@ -50,6 +50,32 @@ TL2 pack (ternary)
 | decode 토큰당 읽는 expert weight (240개) | 349 MiB | 295 MiB |
 | FC / lm_head | int4 | int4 + offset (BF16 원본 값 복원) |
 
+packing (weight 값을 바이트에 채우는 방식)
+
+```
+QS2 : weight 1개 = 2 bit, 1 byte에 4개
+      [ 00 | 01 | 10 | 01 ]   (-1→00, 0→01, +1→10, 11은 안 씀)
+
+TL2 : weight 3개 = 5 bit
+      (w0, w1, w2) → 번호 = 9·w0 + 3·w1 + w2  (-13 ~ +13)
+                  → 크기 4 bit (0~13) + 부호 1 bit
+      예) (+1, -1, 0) → +6 → 크기 6, 부호 +
+          (-1, +1, 0) → -6 → 크기 6, 부호 -
+```
+
+TL2 블록 (weight 24 × 128열 = 3,072개 → 640 byte)
+
+```
+0 ~ 511 byte   : 128열의 크기 nibble (열마다 3개 묶음 8개 × 4 bit)
+512 ~ 639 byte : 128열의 부호 bit   (열마다 8 bit)
+```
+
+- 크기 / 부호를 나눈 이유 : decode가 곱셈 대신 표 조회로 계산
+  - activation 3개로 14칸 표를 미리 만듦 (예 : 표[6] = a0 - a1)
+  - 크기 4 bit로 표 조회 → 부호 1 bit로 뒤집기 = weight 3개 계산 끝
+  - HVX 표 조회 명령이 4 bit 인덱스(16칸) → 14칸 표가 딱 맞음
+- 128열 단위로 둔 이유 : HVX 레지스터 128 byte → 한 번 읽으면 128열의 같은 묶음이 한꺼번에 들어옴
+
 ```
 prefill : packed ──DMA──▶ VTCM ──HVX가 int4로 펼침──▶ HMX
 decode  : packed 그대로 ──DMA──▶ VTCM ──▶ HVX GEMV (표 조회 + 부호 뒤집기)
