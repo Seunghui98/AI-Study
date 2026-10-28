@@ -124,3 +124,102 @@ expert 1개 : 1.45 MiB (2-bit) / 1.23 MiB (ternary) / 참고 LFM2 5.25 MiB
 - 긴 문맥 decode : 3만 토큰에서 attention이 토큰 시간의 51%
 - static 양자화 모드 속도 개선 (현재 prefill 82 TPS)
 - PetCare 에이전트 시나리오 tool 호출 정확도
+
+---
+
+## 부록. 상세 설명
+
+### A. 행 분할을 NPU(skel) 안에서 처리
+
+FC 콜 하나가 VTCM에 올릴 수 있는 행 수
+- VTCM = 입력 행(u8) + weight slice double buffer + staging 512 KiB
+- 실제 값 : qkv(K=2816) 1,344행 / o proj(K=4096) 1,472행 / full 층 o proj(K=8192) 704행
+- 2048행 prefill이면 qkv 2번, o proj 2~3번 나눠야 함
+
+```
+기존 : CPU가 나눠서 여러 번 호출
+CPU ── call(행 0~1343) ──▶ NPU   ← 버퍼 전체 map/sync (qkv 4.3 ms)
+CPU ── call(행 1344~2047) ─▶ NPU  ← 또 버퍼 전체 map/sync
+
+변경 : CPU는 1번 호출, NPU가 내부 loop
+CPU ── call(행 0~2047) ──▶ NPU   ← map/sync 1번
+                             for (m0 = 0; m0 < 2048; m0 += 1344)
+                                 행 m0 ~ m0+1343 계산 → 출력의 같은 행 위치에 바로 씀
+```
+
+- norm / RoPE는 행 단위 연산이라 나눠 계산해도 결과 동일
+- FastRPC map/sync 비용 : 실제 사용 길이와 무관하게 버퍼 MiB당 약 27 us
+- p2048 : qkv 65 → 35콜 (638 → 506 ms), o proj 95 → 60콜 (410 → 291 ms)
+
+### B. 행 quantize 1번만 (MoE pack)
+
+MoE 콜 입력 : f32 행 M개, 행마다 expert 8개로 routing
+HMX 입력 : expert별로 자기 행만 모아서 u8 타일(AH)로 pack
+
+```
+기존 : expert마다 f32에서 다시 quantize
+expert 3  : row 7 (f32 읽기 → scale 계산 → u8 변환 → pack)
+expert 15 : row 7 (f32 읽기 → scale 계산 → u8 변환 → pack)   ← 같은 행 반복
+...         row 7이 8번 quantize됨
+
+변경 : quantize는 1번, expert별로는 byte만 모음
+1) scan : 모든 행을 1번씩 u8로 quantize (행 순서대로 버퍼에 저장)
+2) pack : expert마다 자기 행의 u8 byte만 gather → AH 타일
+```
+
+- quantize는 행 단위 scale이라 어느 expert로 가도 같은 byte → 공유 가능 (결과 bit 동일)
+- 같은 커밋에서 down 결과 scatter도 타일 단위 → 행 단위 연속 쓰기로 변경
+- 2048행 MoE 콜 worker 시간 : pack 63 → 27 ms, down scatter 128 → 74 ms
+- prefill p2048 4,485~4,970 → 3,969~4,109 ms
+
+### C. HMX 연산 중에 HVX가 앞 결과 후처리
+
+용어
+- GU : gate_up matmul (HMX) / DN : down matmul (HMX)
+- DQ : dequant + GeGLU (HVX) / RQ : down 입력용 requant (HVX) / SC : down 결과 dequant + scatter (HVX)
+
+```
+기존 : 직렬 (HMX가 HVX 끝날 때까지 대기)
+HMX │█GU b0█│      │█GU b1█│      │█GU b2█│      │
+HVX │       │▒DQ b0▒│      │▒DQ b1▒│      │▒DQ b2▒│
+                ↑ HMX idle       ↑ HMX idle
+
+변경 : 결과 버퍼(acc staging) 2개 A/B 교대
+HMX │█GU b0→A█│█GU b1→B█│█GU b2→A█│█GU b3→B█│
+HVX │         │▒DQ b0 A▒│▒DQ b1 B▒│▒DQ b2 A▒│▒DQ b3 B▒│
+              HMX가 B를 채우는 동안 HVX가 A를 처리
+```
+
+64행 블록 단위로도 한 칸씩 밀어서 겹침
+
+```
+HMX │GU n│GU n+1│DN n │GU n+2│DN n+1│
+HVX │    │DQ n  │RQ n │SC n  │DQ n+2 ...
+     → 블록 n의 down을 블록 n+1의 gate_up 뒤에 발행 → 블록 n의 RQ가 HMX 연산 뒤에 숨음
+```
+
+weight DMA도 겹침
+
+```
+DMA │GU w(e)│DN w(e)│GU w(e+1) → gate_up 영역 재사용│
+HMX │       │██ GU e ██│██ DN e ██│██ GU e+1 ██│
+```
+
+효과
+- (LFM2) 한쪽 유닛이 놀던 시간 6.9 ms / 22.2 ms 콜 → quant 1,440 → 354 us, scatter 1,056 → 23 us
+- (Gemma4, S25U) down epilogue를 background로 : 콜 32.2 → 30.8 ms, scatter 대기 2.8 → 0.3 ms
+- (Gemma4 2-bit, S26U) down epilogue 대기열 분리 : 대기 13.5 → 4.4 ms, 콜 30.6 → 26.1 ms
+
+### D. Attention을 NPU로 처리한 효과
+
+| 비교 | 전 | 후 |
+|---|---|---|
+| 1.9만 토큰 prefill 전체 (S26U) | CPU attention 423 s | NPU attention 약 49~50 s (385~394 TPS) |
+| 1024토큰, 30 layer attention 시간 합 (S25U) | 774 ms | 425~497 ms |
+| 2.8만 토큰 prefill (4096열 이상 fp16 fallback 제거) | 69.5 s | 39.9 s |
+| decode 토큰당 attention (S25U → S26U) | 20.9 ms | 6.7 ms |
+
+- 1.9만 토큰 : 같은 기기에서 attention만 CPU로 돌린 기준 실행과 비교, 약 8.5배 (49~50 s는 TPS로 환산한 값)
+- 1024토큰 774 ms는 이미 NPU 실행 상태이고, 그 뒤 host 쪽 비용 정리(KV 등록 load로 이동, append 양자화 HVX 병렬화)로 줄인 것
+- kernel 단독 : sliding 층(1024 × 1024) 1개 18.4 ms
+- 짧은 문맥(1K)에서 CPU attention vs NPU attention 직접 비교한 수치는 PR에 없음
