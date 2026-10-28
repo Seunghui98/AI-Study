@@ -41,7 +41,7 @@ QS2 pack (2 bit)
 TL2 pack (ternary)
 - weight 하나 = -1 / 0 / +1 셋 중 하나 → 변환표 없이 커널이 값을 바로 읽음
 - 2 bit는 칸이 4개인데 값은 3개라 1칸이 늘 빔 → weight 3개를 묶어 5 bit에 (27가지 ≤ 32칸) = 1개당 1.67 bit
-- ternary 전용 포맷 : 표 없음, 1/7 보정 없음
+- ternary 전용 포맷 (bitnet.cpp의 TL2 packing 방식) : weight 값 변환표 없음, 1/7 보정 없음
 
 | | QS2 pack | TL2 pack |
 |---|---|---|
@@ -71,7 +71,7 @@ TL2 블록 (weight 24 × 128열 = 3,072개 → 640 byte)
 ```
 
 - 크기 / 부호를 나눈 이유 : decode가 곱셈 대신 표 조회로 계산
-  - activation 3개로 14칸 표를 미리 만듦 (예 : 표[6] = a0 - a1)
+  - activation 3개로 14칸 표를 미리 만듦 (예 : 표[6] = a0 - a1) ← weight 변환표가 아니라 activation 내적 표
   - 크기 4 bit로 표 조회 → 부호 1 bit로 뒤집기 = weight 3개 계산 끝
   - HVX 표 조회 명령이 4 bit 인덱스(16칸) → 14칸 표가 딱 맞음
 - 128열 단위로 둔 이유 : HVX 레지스터 128 byte → 한 번 읽으면 128열의 같은 묶음이 한꺼번에 들어옴
