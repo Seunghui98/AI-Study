@@ -118,7 +118,7 @@ host : fp16 K/V 행 ──전송──▶ DSP : (head, dim)별 |max| → scale �
 
 | 방법 | 효과 (p1024) |
 |---|---|
-| 절댓값 최대 / 양자화를 DSP 스레드 1개 → worker pool + HVX 벡터화 | seed RPC 429 → 93 ms |
+| 절댓값 최대 / 양자화를 DSP 스레드 1개 → worker pool 8 스레드(7 worker + 호출 스레드) + HVX 벡터화 | seed RPC 429 → 93 ms |
 | host에서 fp16→f32 변환 안 하고 그대로 전송, DSP에서 넓힘 | host 변환 145 → 0 ms |
 | RoPE 테이블 층마다 30번 전송 → 1번 공유 (그래프 초기화 쪽) | 439 ms 제거 |
 
