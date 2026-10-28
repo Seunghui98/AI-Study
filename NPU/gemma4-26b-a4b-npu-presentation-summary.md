@@ -323,15 +323,16 @@ expert 15 : row 7 (f32 읽기 → scale 계산 → u8 변환 → pack)   ← 같
 - DQ : dequant + GeGLU (HVX) / RQ : down 입력용 requant (HVX) / SC : down 결과 dequant + scatter (HVX)
 
 ```
-기존 : 직렬 (HMX가 HVX 끝날 때까지 대기)
-HMX │█GU b0█│      │█GU b1█│      │█GU b2█│      │
-HVX │       │▒DQ b0▒│      │▒DQ b1▒│      │▒DQ b2▒│
-                ↑ HMX idle       ↑ HMX idle
+기존 : 결과 버퍼 1개 → HMX와 HVX가 번갈아 기다림
+HMX  │ 곱셈1    │          │ 곱셈2    │          │ 곱셈3    │          │
+HVX  │          │ 후처리1  │          │ 후처리2  │          │ 후처리3  │
+                 ↑ HMX 쉼              ↑ HMX 쉼              ↑ HMX 쉼
+     HMX가 결과를 버퍼에 쓰면, HVX가 그 버퍼를 다 처리해야 다음 곱셈 시작
 
-변경 : 결과 버퍼(acc staging) 2개 A/B 교대
-HMX │█GU b0→A█│█GU b1→B█│█GU b2→A█│█GU b3→B█│
-HVX │         │▒DQ b0 A▒│▒DQ b1 B▒│▒DQ b2 A▒│▒DQ b3 B▒│
-              HMX가 B를 채우는 동안 HVX가 A를 처리
+변경 : 결과 버퍼 2개(버퍼A, 버퍼B)를 번갈아 사용
+HMX  │ 곱셈1 -> 버퍼A │ 곱셈2 -> 버퍼B │ 곱셈3 -> 버퍼A │ 곱셈4 -> 버퍼B │                │
+HVX  │                │ 버퍼A 후처리1  │ 버퍼B 후처리2  │ 버퍼A 후처리3  │ 버퍼B 후처리4  │
+     HMX가 버퍼B에 쓰는 동안 HVX는 버퍼A를 처리 → 둘 다 쉬지 않음
 ```
 
 64행 블록 단위로도 한 칸씩 밀어서 겹침
