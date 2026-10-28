@@ -31,30 +31,31 @@ device : S26U (Hexagon v81) / 일부 S25U
 
 ## 2. Weight 포맷 : 2-bit → ternary
 
-- QS2 : 2-bit 코드가 int4 값 4개짜리 palette를 가리킴 (값은 4개 중 하나). 10/13 pack은 원본 checkpoint를 4 레벨로 양자화한 것
-- TL2 : 값이 -1/0/1 3개뿐인 ternary checkpoint를 palette 없이 1.67 bit로 바로 pack
-  - QS2 컨테이너에 ternary를 담을 수도 있음(palette 3개만 사용, 2 bit) → TL2는 같은 값을 더 촘촘히 담고 커널이 직접 읽음
-- FC / lm_head는 int4 affine (scale + offset) → BF16 원본 값을 그대로 복원
+expert weight를 저장하는 방식이 두 가지
 
-| | QS2 pack (10/13) | TL2 pack (10/15~) |
+```
+QS2 (2-bit)   : weight 하나 = 2 bit 번호 (00/01/10/11)
+                번호 → 값 변환표 4칸 (tensor마다 하나, int4 값 4개를 골라 둠)
+                읽을 때 : 번호 → 표 조회 → 값
+
+TL2 (ternary) : weight 하나 = -1 / 0 / +1 셋 중 하나
+                값이 정해져 있어서 변환표 없음, 커널이 바로 읽음
+                값 3개면 2 bit는 낭비 → 3,072개를 640 byte에 (1.67 bit)
+```
+
+- QS2 pack (10/13) : 원본 google checkpoint를 4개 값으로 양자화해서 만든 것
+- TL2 pack (10/15~) : 처음부터 ternary(-1/0/1)로 양자화된 checkpoint(AIMET)를 그대로 pack한 것
+- 두 pack은 포맷만 아니라 checkpoint도 다름 → 성능 차이에 둘 다 섞여 있음
+
+| | QS2 pack | TL2 pack |
 |---|---|---|
-| expert 값 | int4 중 4개 (palette) | -1 / 0 / 1 |
-| expert 저장 | 2 bit + palette | 1.67 bit, palette 없음 |
-| checkpoint | 원본 google BF16 | ternary로 미리 양자화된 BF16 (AIMET) |
-| FC / head | int4 (QS4CX) | int4 affine |
-| pack 크기 | 7.0 GiB | 6.2 GiB |
+| expert 값 | int4 중 4개 | -1 / 0 / 1 |
 | expert 1개 | 1.45 MiB | 1.23 MiB |
 | decode 토큰당 읽는 양 (240 expert) | 349 MiB | 295 MiB |
+| FC / lm_head | int4 | int4 + offset (BF16 원본 값 그대로 복원) |
+| pack 크기 | 7.0 GiB | 6.2 GiB |
 
-```
-ternary 저장
-weight 24 × 128 = 3,072개 (-1/0/1) ──▶ 640 byte  (= 1.67 bit/weight)
-                                        + 열마다 fp32 scale, column sum
-
-prefill : packed ──▶ VTCM에서 int4로 펼침 ──▶ HMX
-decode  : packed 그대로 ──▶ HVX LUT GEMV (펼치지 않음)
-```
-
+- 쓰는 방식 : prefill은 VTCM에서 int4로 펼쳐 HMX, decode는 packed 그대로 HVX
 - 효과 (28/29층 4-bit 컨테이너 → 30층 전부 ternary)
 
 | | 전 | 후 |
@@ -64,9 +65,9 @@ decode  : packed 그대로 ──▶ HVX LUT GEMV (펼치지 않음)
 | prefill / decode | 577 / 11.8 TPS | 613 / 15.5 TPS |
 
 - 같이 들어간 것
-  - WH 레이아웃 : 변환기가 HMX 타일 순서로 미리 써 둠 (load 때 변환하면 25 s)
-  - rotated checkpoint : weight가 Hadamard 회전된 상태 → 런타임이 expert 입력에 같은 회전 적용 (sign은 rotation_signs.json)
-  - 변환기 1개로 BF16 HF checkpoint → TL2 pack 한 번에 (50 GB safetensors를 pread, torch 불필요)
+  - HMX 타일 순서(WH)로 변환기가 미리 써 둠 → load 때 변환 안 함 (하면 25 s)
+  - rotated checkpoint : weight가 Hadamard 회전돼 있어 런타임이 expert 입력에 같은 회전 적용
+  - 변환기 1개로 HF checkpoint → TL2 pack 한 번에
 
 ---
 
