@@ -40,7 +40,9 @@ QS2 (2-bit)   : weight 하나 = 2 bit 번호 (00/01/10/11)
 
 TL2 (ternary) : weight 하나 = -1 / 0 / +1 셋 중 하나
                 값이 정해져 있어서 변환표 없음, 커널이 바로 읽음
-                값 3개면 2 bit는 낭비 → 3,072개를 640 byte에 (1.67 bit)
+                값 3개는 log2(3) = 1.58 bit면 되는데 2 bit를 쓰면 4가지 중 1가지가 빈 칸
+                → weight 3개를 묶어 5 bit에 (3³ = 27가지 ≤ 32) = 1.67 bit
+                   5 bit = 크기 4 bit (0~13) + 부호 1 bit
 ```
 
 - QS2 pack (10/13) : 원본 google checkpoint를 4개 값으로 양자화해서 만든 것
