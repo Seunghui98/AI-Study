@@ -29,46 +29,34 @@ device : S26U (Hexagon v81) / 일부 S25U
 
 ---
 
-## 2. Weight 포맷 : 2-bit → ternary
+## 2. Expert weight 포맷 : 2-bit → ternary
 
-expert weight를 저장하는 방식이 두 가지
+- expert weight를 2 bit에서 ternary(-1/0/+1) packing, weight 1개당 평균 1.67 bit로
+- decode는 expert weight 읽기가 병목(memory bound) → 읽는 양이 줄어 성능 개선
 
-```
-QS2 (2-bit)   : weight 하나 = 2 bit 번호 (00/01/10/11)
-                번호 → 값 변환표 4칸 (tensor마다 하나, int4 값 4개를 골라 둠)
-                읽을 때 : 번호 → 표 조회 → 값
+QS2 pack (2 bit)
+- weight 하나 = 2 bit 번호 (00/01/10/11) → 변환표(tensor마다 int4 값 4개)로 값을 읽음
+- 원본 google checkpoint를 4개 값으로 양자화해서 만든 pack
 
-TL2 (ternary) : weight 하나 = -1 / 0 / +1 셋 중 하나
-                값이 정해져 있어서 변환표 없음, 커널이 바로 읽음
-                2 bit는 칸이 4개인데 값은 3개 → 칸 1개가 늘 빔
-                → weight 3개를 한 묶음으로 : 경우의 수 27가지 → 5 bit(32칸)면 충분 → 1개당 1.67 bit
-```
-
-- QS2 pack (10/13) : 원본 google checkpoint를 4개 값으로 양자화해서 만든 것
-- TL2 pack (10/15~) : 처음부터 ternary(-1/0/1)로 양자화된 checkpoint(AIMET)를 그대로 pack한 것
-- 두 pack은 포맷만 아니라 checkpoint도 다름 → 성능 차이에 둘 다 섞여 있음
+TL2 pack (ternary)
+- weight 하나 = -1 / 0 / +1 셋 중 하나 → 변환표 없이 커널이 값을 바로 읽음
+- 2 bit는 칸이 4개인데 값은 3개라 1칸이 늘 빔 → weight 3개를 묶어 5 bit에 (27가지 ≤ 32칸) = 1개당 1.67 bit
+- 처음부터 ternary로 양자화된 checkpoint(AIMET)를 pack한 것 → QS2 pack과는 checkpoint도 다름
 
 | | QS2 pack | TL2 pack |
 |---|---|---|
-| expert 값 | int4 중 4개 | -1 / 0 / 1 |
+| model size | 7.02 GiB | 6.15 GiB |
 | expert 1개 | 1.45 MiB | 1.23 MiB |
-| decode 토큰당 읽는 양 (240 expert) | 349 MiB | 295 MiB |
-| FC / lm_head | int4 | int4 + offset (BF16 원본 값 그대로 복원) |
-| pack 크기 | 7.0 GiB | 6.2 GiB |
+| decode 토큰당 읽는 expert weight (240개) | 349 MiB | 295 MiB |
+| FC / lm_head | int4 | int4 + offset (BF16 원본 값 복원) |
 
-- 쓰는 방식 : prefill은 VTCM에서 int4로 펼쳐 HMX, decode는 packed 그대로 HVX
-- 효과 (28/29층 4-bit 컨테이너 → 30층 전부 ternary)
+```
+prefill : packed ──DMA──▶ VTCM ──HVX가 int4로 펼침──▶ HMX
+decode  : packed 그대로 ──DMA──▶ VTCM ──▶ HVX GEMV (표 조회 + 부호 뒤집기)
+```
 
-| | 전 | 후 |
-|---|---|---|
-| expert arena | 2,624 MiB | 1,792 MiB |
-| peak 메모리 | 4,723 MB | 3,669 MB |
-| prefill / decode | 577 / 11.8 TPS | 613 / 15.5 TPS |
-
-- 같이 들어간 것
-  - HMX 타일 순서(WH)로 변환기가 미리 써 둠 → load 때 변환 안 함 (하면 25 s)
-  - rotated checkpoint : weight가 Hadamard 회전돼 있어 런타임이 expert 입력에 같은 회전 적용
-  - 변환기 1개로 HF checkpoint → TL2 pack 한 번에
+- 효과 (28/29층 4-bit 컨테이너 → 30층 전부 ternary) : decode 11.8 → 15.5 TPS, arena 2,624 → 1,792 MiB, peak 4,723 → 3,669 MB
+- 같이 들어간 것 : HMX 타일 순서(WH)로 변환기가 미리 배치, rotated checkpoint(Hadamard 회전), 변환기 1개로 HF → pack
 
 ---
 
