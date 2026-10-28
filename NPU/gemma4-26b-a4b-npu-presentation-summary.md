@@ -118,10 +118,24 @@ Attention
 - CPU → position 전달 / NPU → 다음 token id만 반환
 - 토큰당 메시지 1번, 그 사이 CPU idle
 
-첫 토큰 준비 (prefill KV → decode int8 cache 변환 + 그래프 초기화)
-- 변환 작업 병렬화 / 벡터화
-- RoPE 테이블 30번 전송 → 1번 공유
-- 1,463 → 506 ms
+첫 토큰 준비 : KV cache seed + 그래프 초기화
+- prefill과 decode는 attention 커널이 다름 → KV cache도 따로 (레이아웃, scale 단위 다름)
+
+| | prefill attention | decode attention (ATTN_M1) |
+|---|---|---|
+| 연산 | HMX, 64행 블록 | HVX, 행 1개 |
+| cache | HMX 타일 순서 int8, scale 층당 1개 | head별 행 순서 int8, scale (층, head, dim)당 1개 |
+
+- seed = prefill이 끝난 prompt의 K/V(host fp16 사본)를 decode cache에 옮겨 담는 작업
+  - 층마다 : fp16 행 읽기 → (head, dim)별 |max|로 scale 결정 → int8 양자화 → append
+  - 처음 : 첫 토큰 3.0~3.2 s 중 seed 2.3~2.5 s (host fp16→f32 변환 0.3 s + DSP 스레드 1개가 양자화 2.0 s)
+- 줄인 것
+  - |max| / append를 DSP worker pool + HVX 벡터화 : seed RPC 429 → 93 ms
+  - fp16 비트 그대로 전송, DSP에서 넓힘 : host 변환 145 → 0 ms, 전송 바이트 절반
+  - host cache(rpcmem)를 복사 없이 제자리에서 읽기
+  - RoPE 테이블 층마다 전송(30번) → 이름으로 공유(1번) : 439 ms 제거
+- 첫 토큰 1,463 → 506 ms (p1024), 2,206 → 636 ms (p2048)
+- seed 후 host fp16 사본 해제 → +470~520 MiB, expert pool이 사용
 
 Attention
 - KV cache int8 + 정수 연산 attention
