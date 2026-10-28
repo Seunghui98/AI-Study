@@ -22,7 +22,7 @@ device : S26U (Hexagon v81) / 일부 S25U
 ## 1. 문제
 
 - 모델 > NPU 메모리
-  - weight 6.6~7.5 GB, NPU 매핑 한도 3.8 GB
+  - weight 6.2~7.0 GiB, NPU 매핑 한도 3.75 GiB (3,840 MiB)
   - expert는 layer당 16개만 상주, 나머지는 flash에서 읽음
 - expert 수 : LFM2 대비 4배 (layer당 32 → 128개, top-8, 30 layer)
 - NPU 연산 증가 → FastRPC 콜 / 복사 비용이 matmul보다 커짐
@@ -31,52 +31,38 @@ device : S26U (Hexagon v81) / 일부 S25U
 
 ## 2. Weight 포맷 : 2-bit → ternary
 
-pack 변천
+- expert weight를 2-bit에서 ternary(-1/0/1, 1.67 bit)로 → 읽는 양이 줄어 decode가 빨라지고 메모리가 줄음
+- FC / lm_head는 int4 affine (scale + offset) → BF16 원본 값을 그대로 복원
 
-| 시기 | expert | FC / head | embedding | pack 크기 |
-|---|---|---|---|---|
-| 10/13 QS2 pack | QS2CX_WH (2-bit 코드 + int4 4-level palette) | QS4CX (int4 + 열별 scale) | Q4_0 | 7.5 GB |
-| 10/15 TL2 pack | TL2CX_WH (ternary -1/0/1, 1.67 bit) | QS4CX_WH_AFFINE (int4 + scale + offset) | Q4_0 | 6.6 GB |
-| 10/16 rotated | TL2 + online Hadamard 회전 | affine | Q4_0 | |
-| 10/20 strict | TL2 + Paley-I 회전, static activation 사이드카 | affine | U4 asym | |
+| | QS2 pack (10/13) | TL2 pack (10/15~) |
+|---|---|---|
+| expert | 2-bit 코드 + int4 palette | ternary, 1.67 bit |
+| FC / head | int4 (QS4CX) | int4 affine |
+| pack 크기 | 7.5 GB (7.0 GiB) | 6.6 GB (6.2 GiB) |
+| expert 1개 | 1.45 MiB | 1.23 MiB |
+| decode 토큰당 읽는 양 (240 expert) | 349 MiB | 295 MiB |
 
-ternary (TL2CX_WH)
-- 값 3개(-1, 0, 1) → (24 × 128) weight 블록을 640 byte에 pack → 1.67 bit/weight
-- 레코드 = packed 코드 + N개 fp32 scale + N개 fp32 column sum (palette, scale/7 없음)
-- prefill : VTCM에서 int4 WH로 펼쳐서 HMX
-- decode : packed 그대로 HVX LUT GEMV (펼치지 않음, 읽는 바이트 그대로 절반 이하)
-- 28/29층은 recipe상 4-bit affine 컨테이너 → 값은 ternary라 전부 TL2로 바꿔도 동일
-  - arena 2,624 → 1,792 MiB, peak 4,723 → 3,669 MB, prefill 577 → 613 TPS, decode 11.8 → 15.5 TPS
+```
+ternary 저장
+weight 24 × 128 = 3,072개 (-1/0/1) ──▶ 640 byte  (= 1.67 bit/weight)
+                                        + 열마다 fp32 scale, column sum
 
-affine (QS4CX_WH_AFFINE)
-- w = scale × (q + offset) → BF16 원본 값을 그대로 복원 (대칭 min/max 재양자화 없음)
-- kernel이 offset × Σ(u8 - zp) 보정을 accumulator에 더함
+prefill : packed ──▶ VTCM에서 int4로 펼침 ──▶ HMX
+decode  : packed 그대로 ──▶ HVX LUT GEMV (펼치지 않음)
+```
 
-expert 1개 크기 (gate_up 2816 → 1408, down 704 → 2816)
+- 효과 (28/29층 4-bit 컨테이너 → 30층 전부 ternary)
 
-| 포맷 | gate_up | down | slot |
-|---|---|---|---|
-| BF16 | 7.56 MiB | 3.78 MiB | 11.3 MiB |
-| int4 affine | 1.89 MiB | 0.95 MiB | 3.0 MB |
-| 2-bit QS2 | 0.95 MiB | 0.47 MiB | 1.45 MiB |
-| ternary TL2 | 811 KiB | 413 KiB | 1.23 MiB |
+| | 전 | 후 |
+|---|---|---|
+| expert arena | 2,624 MiB | 1,792 MiB |
+| peak 메모리 | 4,723 MB | 3,669 MB |
+| prefill / decode | 577 / 11.8 TPS | 613 / 15.5 TPS |
 
-- decode 토큰당 expert 240개 읽음 → QS2 349 MiB / TL2 295 MiB
-- 참고 LFM2 expert (int4) 5.25 MiB
-
-WH 레이아웃
-- 변환기가 HMX 타일 순서(WH)로 미리 써 둠 → load는 읽기만
-- load 때 변환하면 157 MB/s → 모델 하나에 25 s
-
-rotated checkpoint
-- weight가 미리 Hadamard 회전된 상태 → 런타임이 expert 입력에 같은 회전 적용 (gate/up H44×H64, down H44×H16)
-- 회전 sign은 rotation_signs.json (seed에서 재생성, 2816 + 704개)
-- decode HVX FP32 / prefill HMX FP16
-- strict pack은 Paley-I 기저 → sign을 scalar로 곱하던 초기 구현이 prefill 353 TPS → HVX화로 683.70 TPS
-
-변환기
-- weight_converter.py : BF16 HF checkpoint → QS2 pack → convert_tl2_model → affine FC/head → rotation_signs.json 한 번에
-- 50 GB safetensors를 mmap 대신 pread (torch 불필요)
+- 같이 들어간 것
+  - WH 레이아웃 : 변환기가 HMX 타일 순서로 미리 써 둠 (load 때 변환하면 25 s)
+  - rotated checkpoint : weight가 Hadamard 회전된 상태 → 런타임이 expert 입력에 같은 회전 적용 (sign은 rotation_signs.json)
+  - 변환기 1개로 BF16 HF checkpoint → TL2 pack 한 번에 (50 GB safetensors를 pread, torch 불필요)
 
 ---
 
