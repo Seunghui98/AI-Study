@@ -134,3 +134,72 @@ host check(`ATTN M1 SEED Q8 OK`)는 통과하므로 바이트 변환 자체는 �
 
 - decode 커널(ATTN_M1)이 prefill 타일을 직접 읽게 하기: seed 비용만 추가로 아끼는데 커널을 다시 짜야 한다. Step 2로 충분.
 - decode를 HMX row-blocked 커널로 돌리기 (`hexkl_kv_q.h` 주석에 가능하다고 적힘): 행 1개를 HMX에 넣는 건 ATTN_M1(6.7 ms/token)보다 느릴 가능성이 높다.
+
+---
+
+## 8. 첫 토큰 대기 숨기기 (seed 재배치 포함)
+
+### 8.1 지금 첫 토큰이 하는 일 (코드 순서)
+
+prefill이 끝나면 첫 decode 토큰은 **CPU 그래프를 층별로 걷는다.** 층마다 hook이 DSP에 RPC를 보내고, 전부 직렬이다.
+
+| 순서 | 일 | 코드 | 비고 |
+|---|---|---|---|
+| 1 | `ensureGraphInit` : graph_init RPC, MoE expert 테이블·load 파라미터 setParam, attention cache 등록, `e2eStart`(mailbox mmap + token driver 시작) | `htp_compute_ops.cpp:4629-4731` | 첫 hook에서 1번 |
+| 2 | 층마다 : attention hook이 2를 돌려주면 mha_core가 seed RPC (`attn_m1_kv_append_f16`) 후 다시 호출 | `htp_compute_ops.cpp:3478-3482`, `htp_mha_core.cpp:796-826` | 30번 직렬, p1024 합계 83~93 ms |
+| 3 | `poolSync` : TL2 phase 전환, prefetch 초기화, expert pin, host FC 사본 해제, expert 테이블 setParam | `htp_compute_ops.cpp:3949-4040` | 첫 토큰 패킷 직전 |
+| 4 | 토큰 패킷 1개 → DSP 상주 그래프 실행 → id 반환 | `forward` (7395-7435) | 이후 토큰과 같은 약 75~100 ms |
+| 5 | 패킷 뒤 : prefill staging 해제, `growPool` (expert pool 확장 mmap) | 7417-7421 | 2번째 토큰 전에 동기 실행 |
+
+p1024 기준 1~4 합계 506 ms. 이 중 4는 steady state와 같으므로 **숨길 수 있는 건 1·2·3·5 ≈ 400 ms 남짓**. 1과 3의 개별 수치는 커밋에 없고 `[HTP] t1: graph_init_ms= / pool_sync_ms=` 로그가 이미 있으니 한 번 돌리면 나온다.
+
+참고: prefill logits로 뽑은 토큰은 prefill 직후 바로 출력된다(0d0518b). 사용자가 느끼는 멈춤은 "1번째 토큰 → 2번째 토큰" 사이다.
+
+### 8.2 seed를 prefill 안에 숨기기
+
+층 L의 K/V는 **마지막 chunk의 층 L attention이 끝나면 확정**된다(그 step에서 scale 성장 재append까지 포함). 그 시점부터 남은 층(L+1..29)의 prefill이 도는 동안 seed L을 돌릴 수 있다.
+
+```
+마지막 chunk
+층 L : qkv → attention(L) → [seed L 을 background job으로 queue] → MoE(L) → ...
+층 L+1 : ...                                   ↑ 이 동안 worker pool의 빈 시간에 실행
+...
+층 29 : attention(29) → seed 29 (이것만 숨길 수 없음, 1/30)
+```
+
+- 실행 위치: DSP worker pool의 background lane. prefill MoE 호출은 HMX bound라 worker가 약 40%만 바쁘다(950a0ce) → seed(메모리 복사)가 들어갈 자리가 있다. 다만 DDR 대역폭은 MoE의 expert DMA와 경쟁하므로 측정 필요.
+- 진입 방법 두 가지:
+  - (a) `attn_q2_step` 호출에 "last chunk" 플래그 → 커널이 끝날 때 seed job을 queue하고 리턴. IDL 변경 없이 flags 비트 하나.
+  - (b) host가 attention 호출 직후 비동기 `attn_m1_seed_async(layer)` 호출. 새 entry 하나.
+- 전제: 7절 Step 2(masters → 재배치)가 돼 있어야 seed가 "int8 복사"다. fp16 seed를 그대로 배경에 넣으면 host fp16 전송 + |max| pass가 prefill과 겹쳐야 해서 이득이 작다.
+- sliding 층: decode cache는 window(1024) + 생성 길이만 등록된다(`set_decode_kv_window`). seed는 마지막 1024행만 넣어야 하고, 그 앞 행의 |max|는 scale에 반영돼 있어야 한다. 7절 Step 2대로 prefill fixed scale(전체 행 누적 |max|)을 그대로 쓰면 floor 처리가 따로 필요 없다.
+- 메모리: decode cache가 마지막 chunk 동안 prefill cache와 공존한다. 지금도 첫 토큰 때 공존하므로 peak는 늘지 않고, seed 끝난 층의 prefill cache를 바로 해제하면 오히려 준다.
+
+### 8.3 graph_init / token driver를 load 또는 prefill 시작으로
+
+`ensureGraphInit`가 필요로 하는 입력은 load 때 다 있다: 그래프 op 테이블(`graph_words_`), load 파라미터(gamma, RoPE 테이블은 이름 공유), FC arena(FC_IN_ARENA로 이미 load 때 배치), decode KV window(max_seq_len/num_to_generate로 결정). expert 테이블만 첫 MoE 호출 뒤에 확정되는데(`pool_descs_`), 이건 prefill 첫 chunk의 층 0 MoE 호출 뒤 = prefill 초반이다.
+- 옮기면 첫 토큰에서 graph_init RPC + 30층 setParam + attention cache 등록 + token driver 시작이 빠진다.
+- 비용: token driver가 prefill 동안 mailbox를 spin(`spin_us`)하면 DSP 스레드 하나를 먹는다 → driver 시작만 prefill 끝에 두거나, 시작 후 park 상태로 둔다.
+- 측정 먼저: `graph_init_ms`가 몇 ms인지.
+
+### 8.4 poolSync와 growPool을 겹치기
+
+- `dropHostFc`(host 사본 munmap), `pinExperts`, prefetch 초기화는 DSP와 무관한 ARM 일이다. seed RPC들이 도는 동안 ARM 쪽 스레드에서 돌리거나, 8.2를 하면 prefill 마지막 층들 동안 돌린다.
+- `growPool`(첫 토큰 뒤 expert slot mmap + 등록)은 2번째 토큰을 막는다. ARM 스레드에서 비동기로 돌리고, 새 slot은 준비되는 대로 pool에 추가하면 2번째 토큰 지연이 사라진다. miss round가 slot 테이블을 읽는 중이면 lock만 필요.
+
+### 8.5 첫 토큰을 CPU 그래프 걷기 없이 바로 패킷으로
+
+8.2~8.4가 되면 prefill이 끝난 시점에 seed·graph·pool이 전부 준비돼 있으므로, 첫 토큰도 `htpDecodeTokenId` 경로(패킷 1개)로 바로 보낼 수 있다. CPU 그래프 걷기(층별 hook 30 × 수 개 RPC)가 통째로 빠지고 **첫 토큰 ≈ steady state 토큰 1개 + seed 29 잔여분**이 된다.
+
+### 8.6 순서와 기대치
+
+| 단계 | 기대 효과 (p1024, 506 ms 기준) | 선행 |
+|---|---|---|
+| t1 로그로 분해 측정 | 어디가 큰지 확정 | 없음 |
+| growPool 비동기 (8.4) | 2번째 토큰 지연 제거 | 없음, 작음 |
+| graph_init을 load로 (8.3) | graph_init_ms 만큼 | 측정 |
+| seed를 prefill에 숨김 (8.2) | 83~93 ms → 약 3 ms (층 29 몫) | 7절 Step 1-2 |
+| poolSync 겹치기 (8.4) | pool_sync_ms 만큼 | 8.2 |
+| 첫 토큰 직접 패킷 (8.5) | hook 걷기 비용 제거 | 8.2-8.4 |
+
+전부 되면 첫 토큰이 steady state(75~100 ms)에 가까워진다. 단, 위 ms 수치 중 측정된 건 seed(83~93)뿐이고 나머지는 로그를 켜서 재야 한다.
