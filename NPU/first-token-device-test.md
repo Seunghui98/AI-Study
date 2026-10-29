@@ -1,98 +1,138 @@
-# 첫 토큰 / KV int8 — 기기 측정 가이드
+# 첫 토큰 / KV int8 — 기기 실행 가이드
 
 코드: `Seunghui98/nntrainer` 브랜치 `htp/first-token-kv-int8` (base `a3640d2`)
 
 | 커밋 | 내용 | 스위치 (기본 off) |
 |---|---|---|
-| `ecb6eb4` | Phase 2. prefill int8 K scale을 (head, dim)당으로, 비율은 Q에 접음 | `NNTR_HTP_Q2_KDIM=1` |
-| `f30bde9` | Phase 3-A. KDIM일 때 decode seed의 K도 int8 masters에서 (V는 원래 masters) | `NNTR_HTP_KV_SEED_Q=1` (기존 스위치) |
+| `ecb6eb4` | prefill int8 K scale을 (head, dim)당으로, 비율은 Q에 접음 (DSP f32 Q 경로) | `NNTR_HTP_Q2_KDIM=1` |
+| `f30bde9` | KDIM일 때 decode seed의 K도 int8 masters에서 (V는 원래 masters). seed fallback 로그 | `NNTR_HTP_KV_SEED_Q=1` (기존) |
+| `568fa2e` | host NEON u16 Q 경로도 같은 방식으로 접음 → `NNTR_HTP_ATTN_F32_CHECK`로 DSP 접기 검증 가능 | - |
 
-두 스위치를 다 끄면 동작은 base와 같다 (per-head 경로는 같은 inverse·같은 벡터를 씀).
-
----
-
-## 1. 무엇이 바뀌었나
-
-**Phase 2 (`NNTR_HTP_Q2_KDIM=1`)**
-- prefill int8 K: scale `fs_k[head]` → `fs_kd[head][dim]` (decode q8 cache와 같은 단위)
-- HMX 커널: alpha는 그대로 `fs_k = max_d fs_kd`, Q를 u16으로 만들 때 `fs_kd / fs_k`를 곱함 (`hexkl_attn_q2.c` stage_qprep)
-- calibration: host(`q2_grow`, `q2_derive_q`)와 DSP(`attn_q2_step_fqc`) 모두 K는 dim별 max, Q 범위는 접은 Q 기준
-- f32 Q 경로 전용: `NNTR_HTP_ATTN_F32=0`, `NNTR_HTP_ATTN_F32_CHECK`가 있으면 자동 off. f32 호출이 실패한 층은 u16 경로 대신 fp16 경로로 감 (`mha_core: quantized KV cache attention (K per dim needs the f32 Q path) failed` 로그)
-- 덤으로 고친 것: prompt가 8행보다 짧을 때 DSP calibration이 돌지 않은 lane 버퍼까지 합치던 문제
-
-**Phase 3-A (`NNTR_HTP_Q2_KDIM=1` + `NNTR_HTP_KV_SEED_Q=1`)**
-- 첫 decode seed: K·V 모두 DSP의 int8 masters를 그대로 decode cache로 복사. host fp16 K → f32 변환 없음
-- KDIM 없이 `KV_SEED_Q=1`만 켜면 예전처럼 K는 fp16에서
-- seed가 masters를 못 쓰는 층은 이제 이유를 로그로 남김:
-  ```
-  mha_core: <layer> seeds decode from fp16, not the int8 cache (cache_base=.. handle=.. synced=.. pos=.. scales_set=..)
-  ```
-  DSP가 거절하면 기존 로그: `[HTP] attn_m1_seed_kvq: layer N not seeded on the DSP (...)`
-
-**하지 않은 것 (이유)**
-- 1-A growPool 비동기: `growPool`은 `addCapacity` + session_info RPC뿐, slot은 miss 때 lazy로 잡힘 → 할 일 없음
-- 1-B graph_init 조기화, 1-C poolSync 겹치기: `ensureGraphInit`이 decode FC arena와 attention cache 등록까지 하므로 prefill 중에 하면 prefill int8 cache와 함께 PD(3840 MiB)에 올라감. 이득은 아래 0번의 `graph_init_ms`, `pool_sync_ms`를 보고 정함
-- 3-B seed를 prefill 마지막 chunk 중 background로: decode attention ctx가 graph_init 때 생기므로 1-B가 전제. 3-A 후 `kv_seed_rpc_ms`가 작으면 불필요
-- Phase 4 (host fp16 제거): 계획상 3-A가 기기에서 맞다는 확인 + scale 성장 빈도 측정이 먼저. 지금 host fp16은 int8 mirror 재append(scale 성장, compaction 뒤)의 원본이라, 없애려면 DSP 쪽 재양자화·compaction·snapshot이 필요
-- rounding 통일 (`q8_of` → RNE): masters(RNE)와 decode append(half-away)는 정확히 .5인 값에서만 다르고 둘 다 최근접. host check가 차이가 tie에서만 나는 것을 확인함
+스위치를 다 끄면 base와 같은 코드 경로다.
 
 ---
 
-## 2. host에서 확인한 것
+## 1. 빌드
 
-| check | 결과 |
-|---|---|
-| `test/htp/host/run_host_checks.sh` (P2, P3 각각) | 통과 |
-| `unittest_hexkl_kv_q` (meson 대신 gtest 직접 빌드) | 7/7, 새 `FixedScalesKPerDim`: append/dump, `fs_k·Σ(q·r·k8) == Σ(q·s_kd·k8)`, per-head로 되돌리기. mutant 3개 잡힘 |
-| `attn_m1_host_check` 새 `ATTN M1 SEED Q8 KD OK` | masters(dim별 amax/127, RNE) seed == `kv_append` scale bit 단위 동일, K 바이트는 tie에서만 차이. head scale mutant 잡힘 |
-| 바뀐 DSP 소스 `__hexagon__` 타입 체크 (hvx_emu + IDL 생성 헤더) | 경고·에러 없음 |
+`docs/gemma4-htp-user-guide.md` 4.2절과 같다.
 
-host에서 못 한 것: HMX 커널 수치, `kv_fixed_tail_check`(SDK libnative 필요), 실제 nll·ids.
+```bash
+git fetch https://github.com/Seunghui98/nntrainer htp/first-token-kv-int8
+git checkout FETCH_HEAD
 
----
+export ANDROID_NDK=...            # r30
+export HEXAGON_SDK_ROOT=.../Hexagon_SDK/6.4.0.1
+source "$HEXAGON_SDK_ROOT/setup_sdk_env.source"
+export HEXKL_ROOT=.../hexkl-1.0-beta.2/hexkl_addon
+export HEXKL_SDK_VER=6.4.0.2
+export HEX_ARCH=v81
 
-## 3. 기기 측정 순서
-
-공통: p1024, p2048 각 3회. 같은 prompt, greedy.
-```
-NNTR_HTP_PROFILE=1 NNTR_HTP_TOKEN_TRACE=<out>.json ./nntr_causallm <pack>
+bash Applications/CausalLM/build_android.sh --htp --app
 ```
 
-### 0) 기준 (스위치 모두 off) — Phase 0
-읽을 줄:
+skel(`test/htp/build/libnntr_hvx_skel.so`)과 ARM 쪽(`libnntrainer.so`)이 같은 커밋에서 나와야 한다. IDL은 안 바뀌었지만 skel의 calibration 길이 검사가 바뀌었다.
+
+---
+
+## 2. 실행
+
+스크립트: `NPU/run_first_token_tests.sh` (이 저장소). nntrainer 체크아웃 루트에서 실행.
+
+```bash
+cp ~/AI-Study/NPU/run_first_token_tests.sh .
+bash run_first_token_tests.sh stage              # 바이너리 push (D=/data/local/tmp/htp)
+bash run_first_token_tests.sh run p1024.txt      # 아래 6개 케이스 x 3회
+bash run_first_token_tests.sh run p2048.txt
+bash run_first_token_tests.sh summary            # 숫자만 모아 보기
+```
+
+- `p1024.txt`, `p2048.txt`: 지난 측정에 쓴 prompt를 파일로. 첫 인자 그대로 CLI의 prompt가 됨 (chat template 적용)
+- pack 경로가 다르면 `PACK=/sdcard/.../pack`, 반복 횟수는 `REPS=1`
+- 생성 토큰 수는 pack의 `nntr_config.json` `num_to_generate` (기본 127). p2048 512토큰 확인은 이 값을 512로 바꾼 pack으로
+- 로그는 `ft_logs/<prompt>_<case>_r<n>.log`, 토큰 id는 `ft_logs/trace_*.json`
+
+| 케이스 | 환경 | 보는 것 |
+|---|---|---|
+| `base` | 없음 | 기준 (Phase 0): 첫 토큰 분해, ids |
+| `kdim` | `NNTR_HTP_Q2_KDIM=1` | prefill TPS, ids, nll |
+| `kdim_seedq` | `+ NNTR_HTP_KV_SEED_Q=1` | seed 시간, fallback 로그, ids |
+| `seedq_only` | `NNTR_HTP_KV_SEED_Q=1` | 축소안 (K는 fp16, V만 masters) 비교용 |
+| `kdim_f32check` | `KDIM=1 + ATTN_F32_CHECK=1 + ATTN_TRACE=1` | DSP f32 Q 접기 == host NEON 접기 (느림, 시간 무시) |
+| `kdim_hostcalib` | `KDIM=1 + ATTN_DSP_CALIB=0` | DSP calibration == host calibration |
+
+---
+
+## 3. 판정
+
+### 3.1 base — 첫 토큰이 어디에 쓰이나
+summary에서:
 - `[HTP] t1: graph_init_ms=`
 - `[HTP] t1: pool_sync_ms= ... kv_seed_rpc_ms= seeds=`
 - `mha_core: t1 seed pos=.. rows_convert_ms_sum=.. seed_ms_sum=..`
 - `[HTP] token driver: first token pos= id= us=`
 
-→ 첫 토큰이 graph_init / seed / poolSync / 패킷 / 기타로 몇 ms씩인지. 1-B·1-C 진행 여부를 이걸로 정함.
+→ graph_init / seed / pool_sync / 패킷 몫. graph_init_ms가 크면 1-B(graph_init 조기화) 진행.
 
-### 1) `NNTR_HTP_Q2_KDIM=1` — Phase 2 판정
-- device gtest: `unittest_hvx_attn_q` (`test/htp/run_u8i4_layer_on_device.sh`로 빌드) 통과
-- SDK가 있으면: `python3 test/htp/host/run_kv_fixed_tail_check.py ...` 통과
-- ids: 0)과 같거나, 다르면 어디서 갈리는지 (`NNTR_HTP_TOKEN_TRACE`)
-- nll: 기존 측정 방식으로 0)과 비교 (기존 int8 seed 0.2278 기준). 같거나 낮으면 통과
-- `NNTR_HTP_ATTN_TRACE=1`: `q2 clip ... k_max/127=` 와 full 층 CPU 대비 오차(지금 1.2~2.7 %)가 같거나 감소
-- prefill TPS 변화 (Q 준비에 hd/32 벡터 곱 추가, calibration lane 버퍼 증가)
+### 3.2 kdim — Phase 2
+| 항목 | 통과 기준 |
+|---|---|
+| `kdim_f32check` 로그의 `mha_core f32 edge check: ... mismatches=` | 0 (DSP 접기와 host 접기가 같은 연산). 0이 아니면 `>= one u16 step` 수와 층 이름 보고 |
+| `kdim_hostcalib` vs `kdim` ids | same (calibration이 DSP든 host든 같은 scale) |
+| `kdim` vs `base` ids | 같으면 좋고, 다르면 몇 번째 토큰에서 갈리는지 |
+| nll | 기존 방식으로 base와 비교. 같거나 낮으면 통과 (기존 int8 seed 0.2278) |
+| prefill TPS | base 대비 하락이 1~2 % 안 |
+| `quantized KV cache ... failed` 로그 | 없어야 함 |
 
-### 2) `NNTR_HTP_Q2_KDIM=1 NNTR_HTP_KV_SEED_Q=1` — Phase 3-A 판정
-- 위 fallback 로그가 몇 층에서 나오는지, 나오면 그 값 (sliding 층은 window 때문에 `cache_base>0`이면 fp16으로 감 — 예전 p2048 깨짐의 첫 의심 지점)
-- `kv_seed_rpc_ms`, `rows_convert_ms_sum` (K 변환이 빠져야 함), 첫 토큰 ms
-- ids: 1)과 비교, p2048은 512토큰까지. tie 차이만 있으므로 거의 같아야 함
-- 갈리면: `NNTR_HTP_DUMP=<dir>`로 첫 decode 토큰의 층별 attention 출력을 1)과 비교해서 처음 다른 층을 찾음
+### 3.3 kdim_seedq — Phase 3-A
+| 항목 | 기대 |
+|---|---|
+| `seeds decode from fp16, not the int8 cache` 줄 | 몇 층, 어떤 값인지 기록. sliding 층에서 `cache_base>0`이면 그 층은 fp16 seed (예전 p2048 깨짐 첫 의심 지점) |
+| `[HTP] attn_m1_seed_kvq: ... not seeded` | 없어야 함 |
+| `t1: ... seeds= (dsp N ...)` | N = masters로 seed된 층 수 |
+| `rows_convert_ms_sum` | kdim보다 크게 줄어야 함 (K 변환 없음) |
+| 첫 토큰 us | kdim보다 줄어야 함 |
+| ids vs `kdim` | 거의 같아야 함 (차이는 .5 tie rounding뿐). 다르면 아래 |
 
-### 3) Phase 4 사전 측정
-- `NNTR_HTP_Q2_KDIM=1 NNTR_HTP_ATTN_TRACE=1`, 2k / 6k / 20k: `q2 scales grew at rows=` 줄 수 (층별). 거의 없으면 4-A(DSP 재양자화)는 단순 경로로 충분
-- 각 길이의 peak 메모리 (prefill 중)
+ids가 다르면: `kdim`과 `kdim_seedq`를 `NNTR_HTP_DUMP=<dir>`를 더해 한 번씩 돌려 첫 decode 토큰의 층별 attention 출력 덤프를 비교, 처음 다른 층을 찾는다.
+
+### 3.4 Phase 4 사전 측정 (선택)
+`NNTR_HTP_Q2_KDIM=1 NNTR_HTP_ATTN_TRACE=1`로 2k / 6k / 20k prompt:
+- `q2 scales grew at rows=` 줄 수 (층별) → 4-A(DSP 재양자화) 설계
+- `peak memory:` → host fp16 제거 이득 추정
 
 ---
 
-## 4. 결과에 따른 다음 단계
+## 4. 결과 보내줄 것
+
+`bash run_first_token_tests.sh summary > summary.txt` 결과와 nll 수치. 그걸로:
 
 | 결과 | 다음 |
 |---|---|
-| 0)에서 graph_init_ms가 큼 | 1-B 구현 (스위치로) |
-| 1) nll 같거나 개선 | KDIM 기본 on 후보, 2)로 |
-| 1) nll 악화 | 축소안: K는 fp16 seed 유지, V만 masters (지금 `KV_SEED_Q=1`만 켠 상태와 같음) |
-| 2) ids 같음 + seed 빨라짐 | Phase 4 설계 확정 (3)의 성장 빈도 반영), 3-B는 seed 시간이 남으면 |
-| 2) fallback 로그가 sliding 층에서 | windowed cache를 masters에서 seed하는 경로 추가 (window 행만 재배치) |
+| graph_init_ms 큼 | 1-B 구현 |
+| f32check mismatches 0, nll 같거나 개선 | KDIM 기본 on 후보 |
+| f32check mismatches > 0 | stage_qprep 접기 수정 (층 이름·수치로 좁힘) |
+| nll 악화 | 축소안 (`seedq_only`와 같은 상태) 유지 |
+| seedq ids 같음, 첫 토큰 단축 | Phase 4 설계 (3.4 반영). seed 시간이 아직 크면 3-B |
+| fallback이 sliding 층에서 | windowed cache를 masters에서 seed하는 경로 추가 |
+
+---
+
+## 5. host에서 이미 확인한 것
+
+| check | 결과 |
+|---|---|
+| `test/htp/host/run_host_checks.sh` (세 커밋 각각) | 통과 |
+| `unittest_hexkl_kv_q` | 7/7. 새 `FixedScalesKPerDim`, mutant 3개 잡힘 |
+| `ATTN M1 SEED Q8 KD OK` | masters seed == fp16 재양자화: scale bit 동일, K 바이트는 .5 tie에서만 차이. mutant 잡힘 |
+| `abs_max_check` (x86 + aarch64 qemu) | dim별 inv 양자화 NEON == scalar. mutant 잡힘 |
+| 바뀐 DSP 소스 `__hexagon__` 타입 체크 | 에러·경고 없음 |
+
+host에서 못 한 것: HMX 커널 수치, nll/ids. `unittest_hvx_attn_q` 디바이스 gtest는 이 트리의 `test/jni/Android.mk`에 빌드 타겟이 없고, 있어도 f32 Q 경로·DSP calibration을 안 다룬다 → 그 역할을 `kdim_f32check`, `kdim_hostcalib`가 한다.
+
+## 6. 이번에 안 한 것
+
+- 1-A growPool 비동기: slot은 miss 때 lazy로 잡혀서 할 일이 없음
+- 1-B graph_init 조기화 / 1-C poolSync 겹치기: graph_init이 decode FC arena·attention cache를 올려서 prefill 중엔 3840 MiB PD에 같이 올라감. 3.1 숫자로 결정
+- 3-B background seed: 1-B 전제. 3.3에서 seed가 이미 작으면 불필요
+- Phase 4 host fp16 제거: 3.3 확인과 3.4 측정이 먼저
+- rounding 통일: 차이가 tie뿐이고 둘 다 최근접 (host check로 확인)
