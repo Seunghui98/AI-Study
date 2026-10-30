@@ -1,6 +1,6 @@
 # 첫 토큰 / KV int8 — 진행 상태와 기기 측정 기록
 
-코드: `Seunghui98/nntrainer` 브랜치 `htp/first-token-kv-int8` (base `a3640d2`, head `1763aa6`)
+코드: `Seunghui98/nntrainer` 브랜치 `htp/first-token-kv-int8` (base `a3640d2`, head `24fc0f8`)
 
 | 커밋 | 내용 | 스위치 (기본 off) |
 |---|---|---|
@@ -15,6 +15,9 @@
 | `d765641` | 첫 토큰 expert warm-up: prefill 라우팅으로 층별 n개를 graph init 동안 미리 읽음. pool 크기 그대로 | `NNTR_MOE_WARM=<n>` |
 | `f407d99` | `t1: graph_init_ms` 줄에 구간 분해 (place_fc / bind / rpc / params / attn / e2e) | - |
 | `1763aa6` | warm-up을 Gemma 4가 실제로 쓰는 `Lfm2MoELayer`에도 (6회차에서 hook이 등록되지 않던 버그) | `NNTR_MOE_WARM=<n>` |
+| `c25c948` | decode cache seed를 masters에서 HVX로 (64행 tile 전치, window shift, memset 없음) | - |
+| `3322703` | DSP entry: `kv_trim_q`(tile 해제, masters만 남김), `attn_m1_seed_kvq_tiles` | - |
+| `24fc0f8` | C 구조 A: 각 층의 마지막 prefill 호출이 int8 cache를 남기고(masters만) CPU fp16 행을 버림, 첫 토큰은 masters에서 seed | `NNTR_HTP_KV_ADOPT=1` (KDIM 포함) |
 
 스위치를 다 끄면 base와 같다 (2회차에서 ids 비트 동일, prefill 노이즈 범위 안).
 
@@ -166,7 +169,38 @@ host에서 찾은 버그 없음. 남은 설명:
 - graph_init 105~110 ms = params 44~50 (router 가중치 등 load 파라미터 RPC, 약 43 MB) + attn 55~62 (prefill int8 cache 해제, decode cache 등록) + rpc 1 + e2e 2
   - attn과 seed(96 ms)는 C 구조가 없애는 몫
 
-## 7회차 (요청 예정): warm-up 재측정
+---
+
+## C 구조: 구현한 것 (A)과 남은 것 (B)
+
+**발견**: `NNTR_HTP_PAGE_CACHE=0`에서는 `release_prefill`이 켜져 int8 prefill cache가 층의 호출마다 해제되고, 다음 chunk가 CPU fp16 행 전체로 다시 만든다. 즉 prefill 내내 남는 KV는 CPU fp16(원소당 2 B)뿐이고, 첫 토큰이 그 fp16으로 decode cache를 seed한다.
+
+**A (`NNTR_HTP_KV_ADOPT=1`, 구현 완료, 기기 미확인)**
+
+| 시점 | 지금 | A |
+|---|---|---|
+| 층의 마지막 prefill 호출 끝 | int8 해제, fp16 유지 (2 B) | int8을 masters로 trim해서 유지(1 B), 그 층의 fp16 해제 |
+| prefill 끝 ~ 첫 토큰 | fp16 2 B × 30층 | masters 1 B × 30층 |
+| graph init attn (55~62 ms) | decode cache 30층 할당 + memset | lazy 등록 (층마다 seed 때 할당, memset 없음) |
+| 첫 토큰 seed (96 / 157 ms) | fp16 → 양자화 + 스칼라 전치 | masters → HVX tile 전치 (window shift 포함) |
+
+- KDIM을 자동으로 켬 (decode K가 masters에서 오므로 per-dim scale 필요)
+- sliding 층: 생성 시작 때의 compaction은 detached 층의 base만 옮기고, seed가 그만큼 shift
+- KV 공유 층, ring, KV snapshot 저장에서는 hint를 안 줘서 기존 경로
+- 실패 시: fp16이 이미 없으므로 fallback 대신 예외 (원인 로그를 남김)
+- host 검증: `ATTN M1 SEED Q8 TILES OK` (기존 seed와 층 전체 바이트 동일, mutant 3개), `unittest_hexkl_kv_q` 8/8 (trim), `unittest_kv_cache_manager` 35/35 (detached compaction)
+
+**B (prefill 중 host fp16 제거, 미구현)**: prefill peak 자체를 줄이는 단계. 필요한 것:
+1. KVCacheManager를 chunk 크기로 (현재 step 행만)
+2. mha_core 행 번호를 host 행 / DSP 행으로 분리 (masters가 chunk를 넘어 유지)
+3. sliding masters의 DSP compaction
+4. scale 증가 시 int8 → int8 재양자화 (오차 ≤ 2배, 증가 이전 행만)
+5. 호출마다 tile 재bake (지금도 매 호출 전체 재양자화+bake라 느려지지 않음)
+6. CPU attention fallback 차단
+
+서로 맞물려 있고 실수하면 출력이 조용히 깨지는 변경이라, A의 기기 결과(seed 시간, 메모리, 정확도)를 본 뒤 진행.
+
+## 7회차 (요청 예정): warm-up + KV adoption
 
 `NPU/round7-prompt.md`
 
@@ -174,10 +208,11 @@ host에서 찾은 버그 없음. 남은 설명:
 
 | 순서 | 일 | 조건 |
 |---|---|---|
-| 1 | warm-up 효과 측정, n 결정, 기본값 여부 | 7회차 |
-| 2 | C 구조 S1–S7 (decode 형식 masters, prefill RoPE·양자화 DSP, host fp16 KV 삭제, 2배 단위 재양자화, DSP compaction, SEED_Q 삭제): 첫 토큰의 seed 96 ms와 graph_init attn 57 ms를 없앰 | KDIM 통과 → 시작 |
-| 3 | KDIM calib의 남은 +51 ms (p2k): worker와 병합 구간 분해부터 | 측정 |
-| 4 | graph_init params 45 ms (load 파라미터 복사) | 메모리 영향 확인 후 |
+| 1 | 7회차: warm-up 효과, adopt의 첫 토큰·메모리·정확도 | 기기 |
+| 2 | warm n, adopt를 기본값으로 할지 | 7회차 |
+| 3 | C 구조 B (prefill 중 host fp16 제거) | adopt 통과 |
+| 4 | KDIM calib의 남은 +51 ms (p2k) | 7회차 E |
+| 5 | graph_init params 45 ms (load 파라미터 복사) | 메모리 영향 확인 후 |
 | - | DSP fp16 attention 커널 NaN (3회차) | 별건 |
 
 ---
@@ -189,6 +224,9 @@ host에서 찾은 버그 없음. 남은 설명:
 | `test/htp/host/run_host_checks.sh` (각 커밋) | 통과 |
 | `Q2 QPREP KD OK` | DSP 커널의 KDIM Q 접기 = host 공식 (tile 바이트), mutant 3개 |
 | `ExpertWarm.*`, `ExpertLru.*` | warm 목록 규칙, warm-up의 LRU 순서, mock backend로 note→install→begin→end (20/20), mutant 5개 |
+| `ATTN M1 SEED Q8 TILES OK` | masters → decode HVX seed = 기존 스칼라 seed (층 전체 바이트, scale), shift, 0/3/7 worker, mutant 3개 |
+| `unittest_hexkl_kv_q` `TrimKeepsMastersAndFixedScales` | trim 뒤 masters·scale 유지, 다른 entry는 거절 |
+| `unittest_kv_cache_manager` detached | compaction이 detached 층의 base만 옮김, ring / alias 질의 |
 | `Q2C CALIB WORKERS OK` | 두 calibration worker를 소스에서 추출해 스칼라 참조와 lane 단위 비교. mutant 2개 잡힘 |
 | `unittest_hexkl_kv_q` | 7/7 (`FixedScalesKPerDim` 포함) |
 | `ATTN M1 SEED Q8 KD OK` | masters seed == fp16 재양자화 (scale 비트 동일, K 바이트는 tie만 차이) |
