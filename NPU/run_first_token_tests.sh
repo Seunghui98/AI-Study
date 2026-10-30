@@ -7,10 +7,13 @@
 #   bash run_first_token_tests.sh run  p2048.txt
 #   bash run_first_token_tests.sh summary          # grep the numbers
 #
-# Override: D (device dir), PACK (model pack on the device), REPS, OUT.
+# Override: D (device dir), PACK (model pack on the device), REPS, OUT,
+# CASES_ONLY (a space-separated subset of the case names below).
 set -eu
 : "${D:=/data/local/tmp/htp}"
 : "${PACK:=/sdcard/Download/aistudio-mobile/models/gemma4-26b-a4b-htp-w4a32}"
+# only these cases when set, e.g. CASES_ONLY="base warm8 warm16"
+: "${CASES_ONLY:=}"
 : "${REPS:=3}"
 : "${OUT:=ft_logs}"
 
@@ -22,6 +25,8 @@ CASES=(
   "seedq_only:NNTR_HTP_KV_SEED_Q=1"
   "kdim_f32check:NNTR_HTP_Q2_KDIM=1 NNTR_HTP_ATTN_F32_CHECK=1 NNTR_HTP_ATTN_TRACE=1"
   "kdim_hostcalib:NNTR_HTP_Q2_KDIM=1 NNTR_HTP_ATTN_DSP_CALIB=0"
+  "warm8:NNTR_MOE_WARM=8"
+  "warm16:NNTR_MOE_WARM=16"
 )
 
 stage() {
@@ -49,6 +54,9 @@ run() {
   for c in "${CASES[@]}"; do
     local name=${c%%:*}
     local envs=${c#*:}
+    if [ -n "$CASES_ONLY" ] && ! printf ' %s ' $CASES_ONLY | grep -q " $name "; then
+      continue
+    fi
     for r in $(seq 1 "$REPS"); do
       local log="$OUT/${tag}_${name}_r$r.log"
       echo "== $tag $name rep $r"
@@ -64,7 +72,7 @@ run() {
 summary() {
   for log in "$OUT"/*.log; do
     echo "== $(basename "$log" .log)"
-    grep -hE "^prefill:|^generation:|^peak memory|\[HTP\] t1:|token driver: first token|t1 seed pos=" "$log" | tail -n 8
+    grep -hE "^prefill:|^generation:|^peak memory|\[HTP\] t1:|token driver: first token|token driver: token [1-4] |t1 seed pos=" "$log" | tail -n 14
     grep -hE "seeds decode from fp16|attn_m1_seed_kvq:|quantized KV cache .* failed" "$log" | sort | uniq -c | head -5
     grep -hE "f32 edge check" "$log" | awk '{for(i=1;i<=NF;i++) if($i ~ /^mismatches=/) print $i}' | sort | uniq -c | head -3
   done
