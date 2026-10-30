@@ -1,6 +1,6 @@
 # 첫 토큰 / KV int8 — 진행 상태와 기기 측정 기록
 
-코드: `Seunghui98/nntrainer` 브랜치 `htp/first-token-kv-int8` (base `a3640d2`, head `f407d99`)
+코드: `Seunghui98/nntrainer` 브랜치 `htp/first-token-kv-int8` (base `a3640d2`, head `1763aa6`)
 
 | 커밋 | 내용 | 스위치 (기본 off) |
 |---|---|---|
@@ -14,6 +14,7 @@
 | `4294d96` | host 검사 추가: DSP 커널의 KDIM Q 접기(`stage_qprep_kd`)가 host NEON 공식과 tile 바이트 동일 | - |
 | `d765641` | 첫 토큰 expert warm-up: prefill 라우팅으로 층별 n개를 graph init 동안 미리 읽음. pool 크기 그대로 | `NNTR_MOE_WARM=<n>` |
 | `f407d99` | `t1: graph_init_ms` 줄에 구간 분해 (place_fc / bind / rpc / params / attn / e2e) | - |
+| `1763aa6` | warm-up을 Gemma 4가 실제로 쓰는 `Lfm2MoELayer`에도 (6회차에서 hook이 등록되지 않던 버그) | `NNTR_MOE_WARM=<n>` |
 
 스위치를 다 끄면 base와 같다 (2회차에서 ids 비트 동일, prefill 노이즈 범위 안).
 
@@ -24,7 +25,7 @@
 prefill과 decode가 decode 형식의 int8 KV 한 벌만 쓴다. host fp16 KV 없음, 첫 decode의 seed 변환 없음.
 
 1. 회귀 제거 — 완료 (`d1b6873`, 2회차 통과)
-2. KDIM 정확도 게이트 — 진행 중 (4회차 nll은 KDIM이 나쁨, 5회차 층별 오차는 KDIM이 좋음: 6회차에서 판정, 아래)
+2. KDIM 정확도 게이트 — 통과 (6회차: DSP=NEON, nll 차이 없음, 5회차 층별 오차는 KDIM이 절반)
 3. 6k/22k에서 scale 증가 빈도, peak 위치 측정
 4. 구현: masters를 decode 형식으로, prefill RoPE·양자화를 DSP로, 첫 decode가 masters를 넘겨받음, HMX tile은 호출마다 해제, scale 증가는 int8 재양자화(2배 단위), sliding compaction은 DSP memmove, SEED_Q 삭제
 
@@ -128,7 +129,7 @@ host에서 찾은 버그 없음. 남은 설명:
 
 ---
 
-## 6회차 (요청 예정)
+## 6회차 요청 내용
 
 빌드 `f407d99`. 조건은 4회차와 같음 (C=16, greedy, EOS 끔, 128토큰, max_seq_len 2560, `NNTR_HTP_PAGE_CACHE=0`).
 
@@ -137,14 +138,46 @@ host에서 찾은 버그 없음. 남은 설명:
 - C. nll: 4회차 `$P/<prompt>.cpu.ids`에 forced 5칸, `ppl_compare.py`로 판정
 - D. 첫 토큰: 라우팅 로그 1회 → `expert_warm_sim.py`, `NNTR_MOE_WARM=8 / 16` 측정, graph init 분해 줄
 
+---
+
+## 6회차 결과 (build `f407d99`, 모델 `gemma4-26b-a4b-tl2-rotated`, 기기 R5KL309ALRK)
+
+기준 경로는 이 모델로 만든 `cpu.ids` (4회차 파일은 다른 모델).
+
+**A. KDIM 비용 (p2k)**: calib 합 61.3 → 112.8 ms, accel_call_us 618 → 697 ms, prefill TPS 654.6 → 645.9 (−1.3 %). HVX 병합으로 133 → 113 ms만 줄었고 남은 비용이 있음.
+
+**B. DSP 대 NEON (`F32_CHECK`, p1k)**: off와 KDIM 모두 층마다 0.04~0.12 %의 u16 원소가 1 step 이상 다름 (worst 4~32 step), KDIM이 off의 약 1.3배. KDIM 전용 DSP 버그 없음.
+
+**C. nll (`ppl_compare.py`)**
+
+| 비교 | p1k sum ratio [95 % CI] | verdict | p2k | verdict |
+|---|---|---|---|---|
+| KDIM / off | 1.084 [0.98, 1.23] | not worse | 0.983 [0.85, 1.10] | undecided |
+| KDIM+SEED_Q / off (노이즈) | 1.009 [0.92, 1.12] | undecided | 1.000 [0.90, 1.12] | undecided |
+| KDIM / off, host calib | 0.988 [0.89, 1.08] | not worse | 0.953 [0.86, 1.05] | undecided |
+
+"B worse" 없음, 부호 검정 p ≥ 0.25, 중앙값 차이 0. 128토큰 nll의 CI 폭이 ±10~20 %라 2 % 게이트는 이 지표로 못 가림 (4회차의 1.115도 이 폭 안). 5회차의 층별 오차(KDIM이 절반)와 합쳐 **KDIM 통과**.
+
+**D. 첫 토큰 (p1k)**
+
+- `expert_warm_sim.py`: token 1의 240개 중 warm 목록에 든 수 n=4: 63, n=8: 109, n=13: 129, n=16: 140 (token 2~4는 n=16에서 94/76/79)
+- `NNTR_MOE_WARM`: warm 줄 없음, misses 9회 모두 219 → hook이 Gemma 4의 층(`Lfm2MoELayer`)에 없던 버그. `1763aa6`에서 수정
+- 같은 misses에서 miss_us가 70 ms와 115~130 ms로 갈림 (파일 읽기 지연의 차이로 보임) → 비교는 중앙값, 반복 수를 늘림
+- graph_init 105~110 ms = params 44~50 (router 가중치 등 load 파라미터 RPC, 약 43 MB) + attn 55~62 (prefill int8 cache 해제, decode cache 등록) + rpc 1 + e2e 2
+  - attn과 seed(96 ms)는 C 구조가 없애는 몫
+
+## 7회차 (요청 예정): warm-up 재측정
+
+`NPU/round7-prompt.md`
+
 ## 남은 일
 
 | 순서 | 일 | 조건 |
 |---|---|---|
-| 1 | 6회차 결과로 KDIM 판정 | 기기 |
-| 2 | warm-up n 결정, 기본값으로 할지 | 6회차 D |
-| 3 | graph init에서 옮길 수 있는 구간 이동 | 6회차 D의 분해 |
-| 4 | C 구조 S1–S7 (decode 형식 masters, prefill RoPE·양자화 DSP, host fp16 KV 삭제, 2배 단위 재양자화, DSP compaction, SEED_Q 삭제) | KDIM 통과 |
+| 1 | warm-up 효과 측정, n 결정, 기본값 여부 | 7회차 |
+| 2 | C 구조 S1–S7 (decode 형식 masters, prefill RoPE·양자화 DSP, host fp16 KV 삭제, 2배 단위 재양자화, DSP compaction, SEED_Q 삭제): 첫 토큰의 seed 96 ms와 graph_init attn 57 ms를 없앰 | KDIM 통과 → 시작 |
+| 3 | KDIM calib의 남은 +51 ms (p2k): worker와 병합 구간 분해부터 | 측정 |
+| 4 | graph_init params 45 ms (load 파라미터 복사) | 메모리 영향 확인 후 |
 | - | DSP fp16 attention 커널 NaN (3회차) | 별건 |
 
 ---
@@ -155,7 +188,7 @@ host에서 찾은 버그 없음. 남은 설명:
 |---|---|
 | `test/htp/host/run_host_checks.sh` (각 커밋) | 통과 |
 | `Q2 QPREP KD OK` | DSP 커널의 KDIM Q 접기 = host 공식 (tile 바이트), mutant 3개 |
-| `ExpertWarm.*`, `ExpertLru.*` | warm 목록 규칙, warm-up의 LRU 순서 (19/19), mutant 3개 |
+| `ExpertWarm.*`, `ExpertLru.*` | warm 목록 규칙, warm-up의 LRU 순서, mock backend로 note→install→begin→end (20/20), mutant 5개 |
 | `Q2C CALIB WORKERS OK` | 두 calibration worker를 소스에서 추출해 스칼라 참조와 lane 단위 비교. mutant 2개 잡힘 |
 | `unittest_hexkl_kv_q` | 7/7 (`FixedScalesKPerDim` 포함) |
 | `ATTN M1 SEED Q8 KD OK` | masters seed == fp16 재양자화 (scale 비트 동일, K 바이트는 tie만 차이) |
