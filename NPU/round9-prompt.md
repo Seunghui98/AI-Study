@@ -1,11 +1,11 @@
-# 9회차 측정 요청: seed를 pool의 background lane에서 (prefill과 겹치기)
+# 9회차 측정 요청: background seed + warm-up 조기 시작·마감
 
 ## ① 측정 시킬 때 (그대로 붙여넣기)
 
 ```text
 nntrainer HTP(Gemma4-26B-A4B, S26U) 9회차 측정. 코드 수정 없이 측정·보고만.
 빌드: fork Seunghui98/nntrainer, 브랜치 htp/first-token-kv-int8.
-먼저 git fetch 후 git rev-parse --short HEAD 가 3118ec645 인지 확인 (8회차 첫 실행처럼 옛 빌드를
+먼저 git fetch 후 git rev-parse --short HEAD 가 1279a8009 인지 확인 (8회차 첫 실행처럼 옛 빌드를
 재는 일이 없도록). 다르면 측정하지 말고 그 해시만 보고. 해시를 보고서 첫 줄에.
 다시 빌드·stage. skel(libnntr_hvx_skel.so)이 바뀌었으니 skel과 libnntrainer.so를 둘 다 새로 올릴 것
 (IDL은 8회차와 같음).
@@ -34,6 +34,10 @@ adopt / adopt_warm16에서 확인:
 - "t1 seed pos=... from the masters" 줄 (없어야 함, 있으면 개수와 원문 1줄)
 - "could not seed" / "lost its int8 masters" / "NNTR_HTP_KV_ADOPT: the decode caches were registered" 예외 (없어야 함)
 - prefill_seeds 값 (30이어야 함)
+adopt_warm16에서 추가로 (rep마다):
+- "[HTP] t1: warm queued=... at=..." 줄 원문 (at=prefill_end 이어야 함)
+- "[HTP] t1: warm registered=... cancelled=... wait_ms=..." 줄 원문
+  (8회차는 registered=416, wait 68–139 ms였음. 이번엔 wait가 수 ms, 대신 cancelled가 0보다 클 수 있음)
 - 생성 텍스트 앞부분 200자 (정상 / 깨짐)
 - logcat 또는 stderr에 FastRPC / DSP 에러, crash, hang (있으면 원문)
 
@@ -66,9 +70,12 @@ F는 실행별 표 전체 + 중앙값 표, G는 ppl_compare.py 출력 원문 전
 ## 결과에 따른 다음 작업
 
 - **adopt의 prefill TPS가 off에 가까워지고**(8회차 −4.3 / −3.0 % → 거의 0), first_token이 8회차 adopt와 같거나
-  낮고, peak가 off 이하, G가 비트 동일 → 겹치기 성공. 다음은 warm read를 마지막 chunk 동안 층마다 일찍 시작.
+  낮고, peak가 off 이하, G가 비트 동일 → 겹치기 성공.
 - **prefill TPS가 그대로면:** background lane이 비지 않아 seed가 MoE bg job 뒤에서 결국 직렬로 돈 것.
   graph_init_ms가 늘었는지(마지막 층들의 seed를 init이 기다림) 같이 보고 unit 크기나 제출 시점 조정.
 - **first_token이 늘면:** graph init이 남은 seed를 기다리는 시간. graph_init 분해 줄로 확인.
 - **peak가 늘면:** 동시에 살아 있는 int8 cache가 1층보다 많은 것 (reap 시점 문제).
+- **adopt_warm16의 first_token이 adopt보다 낮으면** → warm-up 조기 시작·마감 성공. adopt + warm16을
+  기본값 후보로. cancelled가 크면(수백) 읽기 시작을 더 앞당길 여지.
+- **adopt_warm16이 여전히 adopt보다 느리면:** wait_ms와 token1 misses / miss_us로 어디서 잃는지 확인.
 - **G가 다르면:** background seed와 동기 seed가 다른 결과 → 측정 중단하고 원인 분석.
