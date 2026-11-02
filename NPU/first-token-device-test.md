@@ -238,19 +238,31 @@ host에서 찾은 버그 없음. 남은 설명:
   pool background lane에 올려 다음 층 호출과 겹침
 - adopt_warm16의 warm wait 68–139 ms: warm read를 숨길 구간이 줄어듦
 
-## 9회차 (요청 예정)
+## 9회차 결과 (build `cf97203`, 중앙값 p1k / p2k, 34회 rc=0)
 
-`NPU/round9-prompt.md`: off / adopt / adopt_warm16의 prefill TPS, first_token, peak, nll 비트 동일
+| | off | adopt | adopt_warm16 |
+|---|---|---|---|
+| first_token | 439.2 / 450.9 ms | 208.2 / 214.1 ms | **179.5 / 180.0 ms** |
+| peak | 3626 / 3636 MiB | 3604 / 3614 MiB | 3607 / 3614 MiB |
+| prefill TPS | 596.0 / 655.4 | 607.9 / 641.9 | 567.7 / 641.9 |
+| prefill_seed_ms | – | 52.6 / 66.6 | 56.4 / 64.8 |
+| token1 misses / miss_us | 219 / ~125 ms | 222 / 65~136 ms | ~115 / ~28 ms |
+
+- 목표 대비: 첫 토큰 −59 / −60 %, peak off보다 −19..−22 MiB, ADOPT nll 8회차와 비트 동일, 셀별 ids md5 8회차와 동일
+- warm 마감: wait 68–139 → 2.3–3.8 ms, 416 중 249~288 등록 (p2k rep1만 111: 그 회차 read가 느림), adopt의 miss 시간 양봉(65 / 130 ms)이 사라짐
+- prefill: 같은 rep끼리 adopt − off는 p1k −29..+13 (중앙 −0.3), p2k −25..+6 (중앙 −13.6, 약 −2 %). p1k는 셀과 무관하게 rep 1~2가 느린 기기 상태 차이
+- `prefill_seed_ms`가 52.6 / 66.6 ms로 남은 것: seed 계산(약 20 ms)은 빠졌고, 남은 것은 decode cache 할당(DSP heap 150 → 437 MiB, off에서는 graph init attn 59~75 ms가 같은 할당+memset)과 30번의 RPC로 추정. 기기 미확인
+- 첫 토큰 180 ms의 분해: graph_init 42 (params 38) + token1 ~78 + pool_sync ~4, 나머지 ~55 ms는 아직 분해 안 됨
 
 ## 남은 일
 
 | 순서 | 일 | 조건 |
 |---|---|---|
-| 1 | 9회차: background seed의 prefill TPS 회복 | 기기 |
-| 2 | warm read를 마지막 chunk 동안 층마다 일찍 시작 (adopt_warm16 warm wait) | 9회차 뒤 |
-| 3 | adopt + warm16 기본값 | 1, 2 통과 |
+| 1 | decode cache 할당을 prefill 경로 밖으로 (prefill_seed_ms 52 / 67 ms의 원인 확인 후) | 10회차 |
+| 2 | adopt + warm16 기본값 | 1과 함께 |
+| 3 | 첫 토큰의 분해 안 된 ~55 ms, graph_init params 38 ms | |
 | 4 | C 구조 B (prefill 중 host fp16 제거) | adopt 기본값 |
-| 5 | KDIM calib 남은 +16 ms, graph_init params 45 ms | |
+| 5 | KDIM calib 남은 +16 ms | |
 | - | DSP fp16 attention 커널 NaN (3회차) | 별건 |
 
 ---
