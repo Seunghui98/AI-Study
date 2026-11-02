@@ -1,6 +1,6 @@
 # 첫 토큰 / KV int8 — 진행 상태와 기기 측정 기록
 
-코드: `Seunghui98/nntrainer` 브랜치 `htp/first-token-kv-int8` (base `a3640d2`, head `24fc0f8`)
+코드: `Seunghui98/nntrainer` 브랜치 `htp/first-token-kv-int8` (base `a3640d2`, head `99cedfd`)
 
 | 커밋 | 내용 | 스위치 (기본 off) |
 |---|---|---|
@@ -18,6 +18,8 @@
 | `c25c948` | decode cache seed를 masters에서 HVX로 (64행 tile 전치, window shift, memset 없음) | - |
 | `3322703` | DSP entry: `kv_trim_q`(tile 해제, masters만 남김), `attn_m1_seed_kvq_tiles` | - |
 | `24fc0f8` | C 구조 A: 각 층의 마지막 prefill 호출이 int8 cache를 남기고(masters만) CPU fp16 행을 버림, 첫 토큰은 masters에서 seed | `NNTR_HTP_KV_ADOPT=1` (KDIM 포함) |
+| `bbca713` | 1안: decode cache를 prefill 전에 등록, 각 층의 마지막 prefill 호출에서 바로 seed하고 int8 cache 해제 (DSP가 30층 masters를 동시에 들지 않음) | `NNTR_HTP_KV_ADOPT=1` |
+| `99cedfd` | KDIM calib: K/V pass → 비율 → Q pass(q × ratio의 head당 min/max), per-dim Q 배열·병합 제거 (결과 비트 동일) | `NNTR_HTP_Q2_KDIM=1` |
 
 스위치를 다 끄면 base와 같다 (2회차에서 ids 비트 동일, prefill 노이즈 범위 안).
 
@@ -200,19 +202,43 @@ host에서 찾은 버그 없음. 남은 설명:
 
 서로 맞물려 있고 실수하면 출력이 조용히 깨지는 변경이라, A의 기기 결과(seed 시간, 메모리, 정확도)를 본 뒤 진행.
 
-## 7회차 (요청 예정): warm-up + KV adoption
+## 7회차 요청 내용: warm-up + KV adoption
 
 `NPU/round7-prompt.md`
+
+---
+
+## 7회차 결과 (build `24fc0f8`)
+
+중앙값 5회, p1k / p2k:
+
+| cell | prefill TPS | first_token ms | kv_seed_rpc_ms | graph_init_ms | token1 misses | peak MiB |
+|---|---|---|---|---|---|---|
+| off | 580 / 653 | 433 / 448 | 97 / 159 | 108 / 109 | 219 / 223 | 3626 / 3637 |
+| kdim | 570 / 641 | 422 / 498 | 97 / 160 | 108 / 109 | 222 / 224 | 3627 / 3637 |
+| adopt | 568 / 641 | 340 / 303 | 68 / 73 | 46 / 46 | 222 / 223 | **3816 / 3826** |
+| warm16 | 599 / 649 | 335 / 410 | 97 / 161 | 100 / 107 | 107 / 113 | 3626 / 3635 |
+| adopt_warm16 | 585 / 640 | **250 / 250** | 66 / 71 | 46 / 46 | 104 / 112 | **3816 / 3828** |
+
+- warm16: token1 misses 반으로, 메모리·ids 변화 없음 → 사용 가능
+- adopt: first_token −22 / −32 %, graph_init attn 60 → 5 ms, 정확도는 KDIM+SEED_Q와 nll 비트 동일(G "undecided", "worse" 아님), 예외·깨짐 없음
+- **adopt peak +190 MiB**: peak = RssAnon + dma-buf(DSP heap 포함) 최댓값. DSP heap은 줄지 않으므로, 마지막 chunk 동안 30층 masters를 DSP에 동시에 들고 있던 것이 HWM을 올림 → `bbca713`(1안)에서 각 층 마지막 호출에서 바로 seed하고 int8 해제
+- prefill −2 %는 KDIM 비용 (kdim 셀과 같음). E: KDIM calib 61 → 113 ms, wall 481 → 555 ms → `99cedfd`
+
+## 8회차 (요청 예정)
+
+`NPU/round8-prompt.md`
 
 ## 남은 일
 
 | 순서 | 일 | 조건 |
 |---|---|---|
-| 1 | 7회차: warm-up 효과, adopt의 첫 토큰·메모리·정확도 | 기기 |
-| 2 | warm n, adopt를 기본값으로 할지 | 7회차 |
-| 3 | C 구조 B (prefill 중 host fp16 제거) | adopt 통과 |
-| 4 | KDIM calib의 남은 +51 ms (p2k) | 7회차 E |
-| 5 | graph_init params 45 ms (load 파라미터 복사) | 메모리 영향 확인 후 |
+| 1 | 8회차: 1안의 peak, prefill 비용, KDIM calib | 기기 |
+| 2 | warm16 기본값 (7회차에서 이득만 확인) | 8회차와 함께 결정 |
+| 3 | adopt 기본값 | 8회차 peak 통과 |
+| 4 | prefill 안 seed를 다음 층 MoE와 겹치기 (prefill 비용이 크면) | 8회차 |
+| 5 | C 구조 B (prefill 중 host fp16 제거) | adopt 통과 |
+| 6 | graph_init params 45 ms | 메모리 영향 확인 후 |
 | - | DSP fp16 attention 커널 NaN (3회차) | 별건 |
 
 ---
