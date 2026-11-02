@@ -5,7 +5,7 @@
 ```text
 nntrainer HTP(Gemma4-26B-A4B, S26U) 9회차 측정. 코드 수정 없이 측정·보고만.
 빌드: fork Seunghui98/nntrainer, 브랜치 htp/first-token-kv-int8.
-먼저 git fetch 후 git rev-parse --short HEAD 가 1279a8009 인지 확인 (8회차 첫 실행처럼 옛 빌드를
+먼저 git fetch 후 git rev-parse --short HEAD 가 cf9720327 인지 확인 (8회차 첫 실행처럼 옛 빌드를
 재는 일이 없도록). 다르면 측정하지 말고 그 해시만 보고. 해시를 보고서 첫 줄에.
 다시 빌드·stage. skel(libnntr_hvx_skel.so)이 바뀌었으니 skel과 libnntrainer.so를 둘 다 새로 올릴 것
 (IDL은 8회차와 같음).
