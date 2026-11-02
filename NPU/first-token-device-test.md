@@ -225,20 +225,32 @@ host에서 찾은 버그 없음. 남은 설명:
 - **adopt peak +190 MiB**: peak = RssAnon + dma-buf(DSP heap 포함) 최댓값. DSP heap은 줄지 않으므로, 마지막 chunk 동안 30층 masters를 DSP에 동시에 들고 있던 것이 HWM을 올림 → `bbca713`(1안)에서 각 층 마지막 호출에서 바로 seed하고 int8 해제
 - prefill −2 %는 KDIM 비용 (kdim 셀과 같음). E: KDIM calib 61 → 113 ms, wall 481 → 555 ms → `99cedfd`
 
-## 8회차 (요청 예정)
+## 8회차 결과 (build `99cedfd`, 중앙값 p1k / p2k)
 
-`NPU/round8-prompt.md`
+| | off | adopt |
+|---|---|---|
+| first_token | 417 / 504 ms | 262 / 217 ms |
+| peak | 3628 / 3638 MiB | 3600 / 3612 MiB |
+| prefill TPS | 584 / 657 | 559 / 637 |
+
+- 1안 성공: peak가 off보다 −26..−28 MiB, nll은 7회차 ADOPT와 비트 동일, KDIM calib 112.8 → 77.4 ms (off 61.5)
+- prefill −4.3 / −3.0 %: prefill 안 seed(`prefill_seed_ms` 72 / 84)가 그대로 더해짐 → `3118ec6`에서 seed를
+  pool background lane에 올려 다음 층 호출과 겹침
+- adopt_warm16의 warm wait 68–139 ms: warm read를 숨길 구간이 줄어듦
+
+## 9회차 (요청 예정)
+
+`NPU/round9-prompt.md`: off / adopt / adopt_warm16의 prefill TPS, first_token, peak, nll 비트 동일
 
 ## 남은 일
 
 | 순서 | 일 | 조건 |
 |---|---|---|
-| 1 | 8회차: 1안의 peak, prefill 비용, KDIM calib | 기기 |
-| 2 | warm16 기본값 (7회차에서 이득만 확인) | 8회차와 함께 결정 |
-| 3 | adopt 기본값 | 8회차 peak 통과 |
-| 4 | prefill 안 seed를 다음 층 MoE와 겹치기 (prefill 비용이 크면) | 8회차 |
-| 5 | C 구조 B (prefill 중 host fp16 제거) | adopt 통과 |
-| 6 | graph_init params 45 ms | 메모리 영향 확인 후 |
+| 1 | 9회차: background seed의 prefill TPS 회복 | 기기 |
+| 2 | warm read를 마지막 chunk 동안 층마다 일찍 시작 (adopt_warm16 warm wait) | 9회차 뒤 |
+| 3 | adopt + warm16 기본값 | 1, 2 통과 |
+| 4 | C 구조 B (prefill 중 host fp16 제거) | adopt 기본값 |
+| 5 | KDIM calib 남은 +16 ms, graph_init params 45 ms | |
 | - | DSP fp16 attention 커널 NaN (3회차) | 별건 |
 
 ---
@@ -250,6 +262,7 @@ host에서 찾은 버그 없음. 남은 설명:
 | `test/htp/host/run_host_checks.sh` (각 커밋) | 통과 |
 | `Q2 QPREP KD OK` | DSP 커널의 KDIM Q 접기 = host 공식 (tile 바이트), mutant 3개 |
 | `ExpertWarm.*`, `ExpertLru.*` | warm 목록 규칙, warm-up의 LRU 순서, mock backend로 note→install→begin→end (20/20), mutant 5개 |
+| `ATTN M1 SEED Q8 ASYNC OK` | background seed == 동기 seed (바이트), callback 1회, forward가 seed join, free가 진행 중 seed 마무리, 중복 seed 거절, mutant 1개 |
 | `ATTN M1 SEED Q8 TILES OK` | masters → decode HVX seed = 기존 스칼라 seed (층 전체 바이트, scale), shift, 0/3/7 worker, mutant 3개 |
 | `unittest_hexkl_kv_q` `TrimKeepsMastersAndFixedScales` | trim 뒤 masters·scale 유지, 다른 entry는 거절 |
 | `unittest_kv_cache_manager` detached | compaction이 detached 층의 base만 옮김, ring / alias 질의 |
