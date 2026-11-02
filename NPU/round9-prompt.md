@@ -34,12 +34,12 @@ adopt / adopt_warm16에서 확인:
 - "t1 seed pos=... from the masters" 줄 (없어야 함, 있으면 개수와 원문 1줄)
 - "could not seed" / "lost its int8 masters" / "NNTR_HTP_KV_ADOPT: the decode caches were registered" 예외 (없어야 함)
 - prefill_seeds 값 (30이어야 함)
+- 생성 텍스트 앞부분 200자 (정상 / 깨짐)
+- logcat 또는 stderr에 FastRPC / DSP 에러, crash, hang (있으면 원문)
 adopt_warm16에서 추가로 (rep마다):
 - "[HTP] t1: warm queued=... at=..." 줄 원문 (at=prefill_end 이어야 함)
 - "[HTP] t1: warm registered=... cancelled=... wait_ms=..." 줄 원문
   (8회차는 registered=416, wait 68–139 ms였음. 이번엔 wait가 수 ms, 대신 cancelled가 0보다 클 수 있음)
-- 생성 텍스트 앞부분 200자 (정상 / 깨짐)
-- logcat 또는 stderr에 FastRPC / DSP 에러, crash, hang (있으면 원문)
 
 ## G. 정확도 (p1k, p2k, 각 1회)
 NNTR_PPL_DECODE=$P/<prompt>.cpu.ids 로 forced 실행:
