@@ -268,13 +268,21 @@ host에서 찾은 버그 없음. 남은 설명:
 - 네 목표 모두 충족 (adopt_warm16): 첫 토큰 −60 / −63 %, peak −20 MiB, prefill 차이 잡음 수준, nll·ids 9회차와 동일
 - 남은 편차: adopt 단독의 token1 miss 시간 양봉(70 / 125 ms, 파일 read 지연), aw16 p2k에서 warm 등록이 83~128개로 적은 회차(첫 토큰 189~205 ms)
 
+## 11회차 결과 (build `72dd0e1`, 기본값 전환 확인)
+
+- default(adopt + warm16) = 10회차 adopt_warm16: 첫 토큰 177.5 / 186.0 ms (off 435.6 / 502.0), peak −19..−22 MiB, ids·nll 동일
+- ION staging: params가 오히려 +2 ms (10쌍 모두) → 복사가 원인 아님, `551f3e0`에서 제거
+- 첫 토큰 split: 전부 forward (setup/bind/generate/output 0). forward 177 = graph init 44 + pool sync 5 + packet 78 + ~50 (미분해)
+- 단계별 peak: prefill 3220 / 3355 MiB < 전체 3606 / 3616 → peak는 prefill 이후 (decode 값 0은 단계 전환 버그, `551f3e0`에서 수정)
+  → prefill 중 host fp16 제거(C 구조 2단계)는 peak를 줄이지 못함. 보류
+
 ## 남은 일
 
 | 순서 | 일 | 조건 |
 |---|---|---|
-| 1 | adopt + warm16 기본값 (끄는 스위치 유지) | 10회차 통과 |
-| 2 | C 구조 B: prefill 중 host fp16 제거, int8 하나 | 1 뒤 |
-| 3 | 첫 토큰: graph_init params 38 ms, 분해 안 된 ~50 ms, warm 등록 편차 | |
+| 1 | 12회차: 첫 토큰 정리 작업 미루기, timeline, params DSP 시간 | 기기 |
+| 2 | timeline·params 결과에 따라 남은 ~50 ms / params 38 ms | 12회차 |
+| 3 | C 구조 2단계 | peak가 prefill로 옮겨 오면 (11회차: 아님) |
 | 4 | KDIM calib 남은 +16 ms | |
 | - | DSP fp16 attention 커널 NaN (3회차) | 별건 |
 
