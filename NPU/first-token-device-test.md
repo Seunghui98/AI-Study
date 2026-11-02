@@ -254,15 +254,28 @@ host에서 찾은 버그 없음. 남은 설명:
 - `prefill_seed_ms`가 52.6 / 66.6 ms로 남은 것: seed 계산(약 20 ms)은 빠졌고, 남은 것은 decode cache 할당(DSP heap 150 → 437 MiB, off에서는 graph init attn 59~75 ms가 같은 할당+memset)과 30번의 RPC로 추정. 기기 미확인
 - 첫 토큰 180 ms의 분해: graph_init 42 (params 38) + token1 ~78 + pool_sync ~4, 나머지 ~55 ms는 아직 분해 안 됨
 
+## 10회차 결과 (build `7d7d282`, 중앙값 p1k / p2k, 34회 rc=0)
+
+| | off | adopt | adopt_warm16 |
+|---|---|---|---|
+| first_token | 436.1 / 500.9 ms | 259.3 / 214.5 ms | **174.3 / 183.0 ms** |
+| peak | 3626 / 3636 MiB | 3606 / 3616 MiB | 3606 / 3616 MiB |
+| prefill TPS | 597.9 / 663.5 | 610.0 / 660.7 | 605.6 / 660.5 |
+| prefill_seed_ms | – | 10.7 / 11.2 | 10.9 / 11.1 |
+
+- 할당이 원인이었음: 20회 모두 inline=2 ahead=28, seed RPC 52.6 / 66.6 → 10.7 / 11.2 ms (DSP 안 5.5 ms, 나머지는 RPC 왕복)
+- 같은 rep의 prefill TPS 차이: adopt − off p1k −14..+34, p2k −12..+1 (중앙 −3.3, −0.5 %); aw16 − off p1k 중앙 +9.9, p2k 중앙 −9.2. 방향이 섞인 측정 잡음 수준
+- 네 목표 모두 충족 (adopt_warm16): 첫 토큰 −60 / −63 %, peak −20 MiB, prefill 차이 잡음 수준, nll·ids 9회차와 동일
+- 남은 편차: adopt 단독의 token1 miss 시간 양봉(70 / 125 ms, 파일 read 지연), aw16 p2k에서 warm 등록이 83~128개로 적은 회차(첫 토큰 189~205 ms)
+
 ## 남은 일
 
 | 순서 | 일 | 조건 |
 |---|---|---|
-| 1 | decode cache 할당을 prefill 경로 밖으로 (prefill_seed_ms 52 / 67 ms의 원인 확인 후) | 10회차 |
-| 2 | adopt + warm16 기본값 | 1과 함께 |
-| 3 | 첫 토큰의 분해 안 된 ~55 ms, graph_init params 38 ms | |
-| 4 | C 구조 B (prefill 중 host fp16 제거) | adopt 기본값 |
-| 5 | KDIM calib 남은 +16 ms | |
+| 1 | adopt + warm16 기본값 (끄는 스위치 유지) | 10회차 통과 |
+| 2 | C 구조 B: prefill 중 host fp16 제거, int8 하나 | 1 뒤 |
+| 3 | 첫 토큰: graph_init params 38 ms, 분해 안 된 ~50 ms, warm 등록 편차 | |
+| 4 | KDIM calib 남은 +16 ms | |
 | - | DSP fp16 attention 커널 NaN (3회차) | 별건 |
 
 ---
