@@ -334,6 +334,16 @@ host fp16 제거)는 peak가 decode에서 생겨 이득이 없으므로 보류. 
 `7856dc493` `NNTR_HTP_KV_INT8_ONLY` 스위치 삭제: HTP attention이면 항상 int8 KV 하나 (예외: KV 공유 층, KV cache 파일,
 `NNTR_HTP_KV_ADOPT=0`). 구조: https://claude.ai/artifact/6heWrNP3GkyZZn8GKw8xkG
 
+## 18회차 결과 (새 #4428 위 `htp/kv-int8-4428` `819034a2d`, 0·A·B·C rc=0)
+
+- #4428 리팩터링(84ed8a799) 위로 34커밋을 3커밋으로 옮김. 옵션은 nntr_config.json의 "htp"/"moe" (kv_adopt, warm_experts 추가)
+- 출력: ids·top1·margin·gap이 15·17회차와 모두 같음 (default 13 prompt, off 13 prompt). nll만 1e-12 수준 차이
+  (nll 계산 함수를 #4428이 지운 embedding에서 causal_lm.cpp로 옮겨 컴파일 단위가 바뀜: double 합의 반올림 순서). off 대비 ppl_eval은
+  14회차와 같은 숫자 (0.9737, undecided)
+- 속도·메모리 (중앙값 p1k / p2k): default prefill 620.4 / 669.4 TPS (17회차 600.9 / 666.2), first_token 155.1 / 161.7 ms
+  (156.3 / 161.3), peak 3519 / 3595 MiB (3520 / 3595). off도 15회차 수준. chunk 512 p2k: fills 90, 115.1 ms, ids 17회차와 같음
+- LFM2: 기기의 pack이 htp_fused_v1이라 sr15_v2 요구로 거부 → 미시험
+
 ## 남은 일
 
 | 순서 | 일 | 조건 |
@@ -342,7 +352,7 @@ host fp16 제거)는 peak가 decode에서 생겨 이득이 없으므로 보류. 
 | - | (여지) 첫 토큰 변동: warm read 등록이 적은 회차(55~109개)에 expert miss ↑ → 170~195 ms. 셀과 무관 | |
 | - | (여지) 첫 토큰: params 38 ms(DSP 17.5), token1 expert miss ~30 ms | |
 | - | (제약) 한 context에서 생성 뒤 두 번째 prompt 이어 붙이기 거부 (전과 같음, run()마다 새 prompt는 됨) | 필요해지면 |
-| - | (머지 전) 17회차 뒤 커밋 2개, LFM2 HTP chunk prompt, KV cache 파일 설정은 기기 미실행 | 머지 전 smoke |
+| - | (머지 전) LFM2 HTP(sr15_v2 pack) chunk prompt, KV cache 파일 설정(system_prompt.kvcache)은 기기 미실행 | pack이 생기면 |
 | - | DSP fp16 attention 커널 NaN (3회차) | 별건 |
 
 ---
