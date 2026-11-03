@@ -276,14 +276,25 @@ host에서 찾은 버그 없음. 남은 설명:
 - 단계별 peak: prefill 3220 / 3355 MiB < 전체 3606 / 3616 → peak는 prefill 이후 (decode 값 0은 단계 전환 버그, `551f3e0`에서 수정)
   → prefill 중 host fp16 제거(C 구조 2단계)는 peak를 줄이지 못함. 보류
 
+## 12~14회차와 마무리 (build `7cc5c01`)
+
+- 12회차 (`551f3e0`): 첫 토큰 뒤 정리 작업은 1.2 ms뿐이라 미루기 효과 없음. timeline으로 미분해 ~50 ms의 대부분이
+  to_token(35 / 39 ms)임을 찾음. params 38 ms 중 DSP 17.5 ms. 단계별 peak: 전체 peak는 decode 단계
+- 13회차 (`18ace9d`): RoPE 표 공유로 to_token 35 → 18 ms. params batch는 오히려 54~60 ms, peak +7 MiB → `7cc5c01`에서 되돌림.
+  정확도 13 prompt × 128: nll 비율 0.974, CI [0.88, 1.07], top1 92.7 % 동일
+- 14회차 (`7cc5c01`): 첫 토큰 **154.7 / 159.2 ms** (off 391.6 / 426.7), peak 3605 / 3615 (off −21), params 38 ms 복귀.
+  정확도 재판정 undecided (sign test p=0.177, 기준 이탈 단계 122 / 122, 동점 근처 72 / 69)
+
+**마무리 (사용자 결정)**: 성능 목표 완료, 정확도는 나빠진 신호 없이 판정 보류로 기본값 유지, C 구조 2단계(prefill 중
+host fp16 제거)는 peak가 decode에서 생겨 이득이 없으므로 보류. 구조 정리: https://claude.ai/artifact/HG3mHZV4YXrB9KJH4MPRSF
+
 ## 남은 일
 
 | 순서 | 일 | 조건 |
 |---|---|---|
-| 1 | 12회차: 첫 토큰 정리 작업 미루기, timeline, params DSP 시간 | 기기 |
-| 2 | timeline·params 결과에 따라 남은 ~50 ms / params 38 ms | 12회차 |
-| 3 | C 구조 2단계 | peak가 prefill로 옮겨 오면 (11회차: 아님) |
-| 4 | KDIM calib 남은 +16 ms | |
+| - | (보류) C 구조 2단계: prefill 중 host fp16 제거 | peak가 prefill로 옮겨 오면 |
+| - | (보류) 정확도 3 % 판정: 256 토큰 × 20+ prompt | 필요할 때 |
+| - | (여지) 첫 토큰: params 38 ms(DSP 17.5), token1 expert miss ~30 ms | |
 | - | DSP fp16 attention 커널 NaN (3회차) | 별건 |
 
 ---
