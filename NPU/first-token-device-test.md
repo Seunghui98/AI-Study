@@ -291,7 +291,7 @@ host fp16 제거)는 peak가 decode에서 생겨 이득이 없으므로 보류. 
 ## 15회차 결과 (build `cfb6c08a5`, int8 KV 하나, 44회 rc=0)
 
 - 구조: CPU fp16 KV cache 없음. 30층 공유 fp16 staging 하나 + DSP int8 decode cache가 KV의 유일한 저장소
-  (구조: https://claude.ai/artifact/6heWrNP3GkyZZn8GKw8xkG). 끄기 `NNTR_HTP_KV_INT8_ONLY=0`
+  (구조: https://claude.ai/artifact/6heWrNP3GkyZZn8GKw8xkG). 끄기 `NNTR_HTP_KV_INT8_ONLY=0` (`7856dc493`에서 삭제)
 - 정확도: 13 prompt 전부 `[PPL] decode step=` 줄이 13회차 default와 한 줄도 다르지 않음 (ratio 1.0000, verdict not worse)
 - peak (중앙값, int8only / default14 / off): p1k **3517** / 3606 / 3626, p2k **3594** / 3616 / 3636 MiB.
   prefill 단계 −252~−266 / −168~−175 MiB, decode 단계 −89 / −22 MiB (같은 rep 10회 모두)
@@ -330,6 +330,10 @@ host fp16 제거)는 peak가 decode에서 생겨 이득이 없으므로 보류. 
 **int8 KV 하나 (U) 완료**: CPU fp16 KV cache 없음, 한 블록·chunk 모두 동작, 정확도 not worse(chunk) / 비트 동일(한 블록),
 속도 같거나 빠름, 메모리 감소.
 
+17회차 뒤 (기기 미실행): `bed94e1e4` KV cache 파일 설정(system_prompt.kvcache)이면 fp16 KV 유지 (save/load가 CPU 행을 읽음),
+`7856dc493` `NNTR_HTP_KV_INT8_ONLY` 스위치 삭제: HTP attention이면 항상 int8 KV 하나 (예외: KV 공유 층, KV cache 파일,
+`NNTR_HTP_KV_ADOPT=0`). 구조: https://claude.ai/artifact/6heWrNP3GkyZZn8GKw8xkG
+
 ## 남은 일
 
 | 순서 | 일 | 조건 |
@@ -337,7 +341,8 @@ host fp16 제거)는 peak가 decode에서 생겨 이득이 없으므로 보류. 
 | - | (보류) 정확도 판정 off 대비: 13회차 nll 0.974, CI [0.88, 1.07] undecided. 256 토큰 × 20+ prompt | 필요할 때 |
 | - | (여지) 첫 토큰 변동: warm read 등록이 적은 회차(55~109개)에 expert miss ↑ → 170~195 ms. 셀과 무관 | |
 | - | (여지) 첫 토큰: params 38 ms(DSP 17.5), token1 expert miss ~30 ms | |
-| - | (제약) int8only에서 save/load_kvcache 거부, 생성 뒤 두 번째 prompt 거부 (전부터 한 process 한 prompt) | 필요해지면 |
+| - | (제약) 한 context에서 생성 뒤 두 번째 prompt 이어 붙이기 거부 (전과 같음, run()마다 새 prompt는 됨) | 필요해지면 |
+| - | (머지 전) 17회차 뒤 커밋 2개, LFM2 HTP chunk prompt, KV cache 파일 설정은 기기 미실행 | 머지 전 smoke |
 | - | DSP fp16 attention 커널 NaN (3회차) | 별건 |
 
 ---
