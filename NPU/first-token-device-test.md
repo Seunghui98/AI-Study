@@ -301,6 +301,21 @@ host fp16 제거)는 peak가 decode에서 생겨 이득이 없으므로 보류. 
 - 확인 안 된 것: `prefill_fills` 44회 모두 0. p2k(1986)도 한 블록(INIT_SEQ_LEN 이하)이라 fill·reseed·scale 증가 경로가
   기기에서 한 번도 돌지 않음. int8only의 느린 첫 토큰 3회(174.6 / 183.1 / 185.1 ms, packet 101~103 ms) 원인 미확인
 
+## 16회차 결과 (build `6d89d157f`, chunk 경로, 세 번째 시도에 74회 rc=0)
+
+- 앞선 두 시도: `cfb6c08a5`는 두 번째 chunk를 안전장치가 막음(`2169d3134`에서 고침), `2169d3134`는 두 번째 chunk부터
+  쓰는 f32 attention 경로가 seed하지 않아 세 번째 chunk의 fill이 실패(`6d89d157f`에서 고침)
+- chunk 512: c-int8 prefill_seeds = 30 × chunk 수, fills = 30 × (chunk 수 − 1). 1 chunk prompt 7개는 c-int8 = c-d14 =
+  15회차 int8only (비트 동일). 2 chunk 이상 6개는 다름 (scale이 chunk마다 커져 int8을 비율로 한 번 더 반올림):
+  ppl_eval c-d14 대 c-int8 ratio 0.9973, CI [0.9556, 1.0520], top1 1536 / 1538, undecided
+- **fill이 느림**: 층당 61~80 ms (p1k 60회 3.7 s, p2k 90회 7.2 s) → prefill TPS 153 / 157 (c-d14 231 / 298).
+  fill이 스칼라 C (원소마다 float 비율·rintf, K를 64 B 간격으로 읽음)라서. seed(반대 방향)는 층당 0.27 ms
+- peak (c-int8 − c-d14): prefill −328 / −243, decode −98 / −31 MiB
+- D (chunk 1089 + 1행): 마지막 1행 chunk는 decode hook이 생성 토큰처럼 처리 (seeds 30, fills 0). 에러 없음
+- C (첫 토큰 8회씩): 170 ms 초과는 int8only 3 / 16, default14 2 / 16, 모두 warm registered 55~109 (정상 190~220),
+  token1 misses 174~194 (정상 ~128) → warm read 변동이고 int8only 때문이 아님
+- registered: int8only의 sliding 층 max_seq = prompt + 생성 (p1k 1280, p2k 2176), default14 2560 → 15회차 decode 감소의 원인 확인
+
 ## 남은 일
 
 | 순서 | 일 | 조건 |
