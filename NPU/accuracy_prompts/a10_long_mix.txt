@@ -1,0 +1,43 @@
+Read both texts below and write a short essay on what they say about how new technologies are adopted, with examples from each.
+
+Text one.
+
+Read the passage and answer the questions that follow it.
+
+The spread of the printing press in fifteenth century Europe is often told as the story of one inventor, but it is better understood as the meeting of several older technologies with a new kind of business. Paper had been made in Europe for two centuries, after the craft arrived from the Islamic world through Spain and Italy. Screw presses were already used for pressing grapes and olives. Metalworkers knew how to cast small objects in moulds. What changed in the middle of the century was the combination of these skills with movable metal type, cast in large numbers from reusable moulds, and with an ink thick enough to cling to metal.
+
+The first printers were entrepreneurs who borrowed heavily. A press, a stock of type and a supply of paper were expensive, and a printed book earned nothing until the whole edition had been sold. Many early print shops failed. Those that survived found reliable markets: religious texts, grammars for schools, legal documents, calendars, and short pamphlets that could be sold quickly. Within fifty years there were presses in more than two hundred towns, and millions of printed books were in circulation.
+
+The effects were slow and uneven. Printed books were cheaper than manuscripts, but still beyond the means of most people, and literacy rose only gradually. Yet printing made texts stable in a way that copying by hand never had. Every copy of an edition was the same, so a scholar in one city could refer to a page and line that a scholar in another city could find. Errors could be listed and corrected in the next edition. Maps, tables and diagrams could be reproduced without the distortions that crept in when each copy was drawn by hand.
+
+Printing also changed the speed at which arguments travelled. A pamphlet could be written, printed and carried to another country in a matter of weeks, and replies could follow just as quickly. Governments and churches soon tried to control what was printed, with licences and lists of forbidden books, but the number of presses and the ease of moving them across borders made complete control impossible.
+
+Questions: Why does the passage say the press is better understood as a combination than as a single invention? What kinds of books helped early printers survive, and why? Name two ways in which printing made knowledge more reliable.
+
+Text two.
+
+The following is an introduction for engineers who are new to mobile accelerators.
+
+Modern phones carry several kinds of processors on one chip. The CPU cores run the operating system and most application code. The GPU draws the screen and can run general compute work. The NPU, sometimes called a DSP or a tensor accelerator, is built for the dense multiply and accumulate loops that dominate neural networks. Each of these processors reaches memory in a different way, and that difference decides more about real performance than the peak numbers printed in a datasheet.
+
+The largest pool of memory is the main DRAM, shared by every processor. It is large, several gigabytes, but slow compared to the speed at which an accelerator can consume data. Close to each accelerator sits a much smaller memory that is fast enough to keep its arithmetic units busy. On some NPUs this is a tightly coupled memory of a few megabytes; data must be copied into it, usually by a DMA engine, before the matrix unit can read it. Between the two there are caches, which help the CPU a great deal but help an accelerator only when its access pattern is regular.
+
+A useful way to reason about a workload is to count how many bytes it must move for each arithmetic operation it performs. A large matrix multiplication reuses every loaded value many times, so it is limited by arithmetic. A matrix-vector product, which is what a language model does for every generated token, reuses almost nothing: each weight is loaded once and used once. Such a workload is limited by memory bandwidth, and making the arithmetic faster does not help at all.
+
+This is why the first token and the following tokens of a language model behave so differently. Processing the prompt is a sequence of large matrix multiplications, and the accelerator can run close to its peak. Generating each new token is a chain of matrix-vector products, and the speed is set by how quickly the weights can be streamed from memory. Techniques that reduce the number of bytes per weight, such as storing weights in four or even two bits, therefore speed up generation almost in proportion to the reduction.
+
+Explain, in a few paragraphs, how a key-value cache changes this picture during generation, and what an engineer should measure first when the generation speed is lower than expected.
+
+Text three.
+
+Below is an excerpt from a company policy. Explain in plain language what an employee must do in each of the situations listed at the end.
+
+Section 4. Use of company devices and data.
+4.1 Company devices, including laptops, phones and storage media, are provided for work purposes. Limited personal use is permitted provided that it does not interfere with work, does not involve unlawful content, and does not consume significant network or storage resources.
+4.2 Employees must not disable, bypass or uninstall security software installed by the IT department, including disk encryption, endpoint protection and the virtual private network client. Requests for exceptions must be submitted in writing and approved by the IT security manager before any change is made.
+4.3 Confidential information may be stored only on company devices or on storage services approved by the IT department. Confidential information must not be sent to personal email accounts or uploaded to public file sharing services. Where confidential information must be shared with an external party, the employee must use the approved secure transfer service and must obtain the consent of the information owner.
+4.4 The loss or theft of a company device, or the suspected disclosure of confidential information, must be reported to the IT service desk without delay and in any case within twenty four hours. The employee must provide a description of the device and of any information it may have held, and must cooperate with any investigation.
+4.5 When an employee leaves the company or changes role, all company devices and copies of confidential information must be returned or deleted as instructed by the employee's manager, no later than the last working day.
+4.6 Breaches of this section may lead to disciplinary action. Deliberate or repeated breaches may be treated as gross misconduct.
+
+Situations: (a) You want to check your personal email on your work laptop during lunch. (b) The VPN client slows down a video call and you would like to turn it off. (c) A supplier asks you to send a confidential price list to their personal email address. (d) You left your work phone in a taxi on Friday evening and noticed only on Saturday morning.

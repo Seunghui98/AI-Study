@@ -1,0 +1,13 @@
+Solve the following problems. Show your reasoning step by step and give the final answer of each on its own line.
+
+1. A water tank holds 1,200 litres when full. One pipe fills it at 40 litres per minute, and a drain empties it at 15 litres per minute. The tank starts one quarter full, and both the pipe and the drain are opened at the same time. How many minutes does it take to fill the tank?
+
+2. A shop sells notebooks for 3.50 each or a pack of five for 15.00. A teacher needs 23 notebooks. What is the lowest amount she can pay, and how should she buy them?
+
+3. The average of five numbers is 18. When one of the numbers is removed, the average of the remaining four is 16. Which number was removed?
+
+4. A train leaves a station at 9:40 and travels at 90 kilometres per hour. A second train leaves the same station on a parallel track at 10:10 and travels at 120 kilometres per hour in the same direction. At what time does the second train catch up with the first, and how far from the station are they then?
+
+5. A rectangle has a perimeter of 54 centimetres, and its length is twice its width plus 3 centimetres. Find its area.
+
+6. In a class of 30 students, 18 play football, 12 play basketball, and 7 play both. How many students play neither sport?

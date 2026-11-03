@@ -1,0 +1,17 @@
+The following is a transcript of a support call. Write the agent's next reply and then a short summary of the problem for the internal ticket.
+
+Customer: Hi, my laptop stopped connecting to the office network this morning. It was fine yesterday.
+Agent: I'm sorry to hear that. Can you tell me what you see when you try to connect?
+Customer: It says it's connected to the wifi, but nothing loads. The browser just spins and then says the site can't be reached.
+Agent: Thanks. Are other devices on the same network working, for example your phone?
+Customer: Yes, my phone works fine on the same wifi. Only the laptop has the problem.
+Agent: Understood. Did anything change on the laptop since yesterday, like an update or new software?
+Customer: Now that you mention it, it installed updates overnight and restarted. I also had to sign in again this morning.
+Agent: That's helpful. Could you open a command window and type ipconfig, then read me the line that starts with IPv4 address?
+Customer: It says 169.254.31.7.
+Agent: Thank you. And the default gateway line just below it?
+Customer: That one is empty.
+Agent: All right. An address starting with 169.254 usually means the laptop did not receive an address from the network. Could you try turning the wifi off and on again from the system tray?
+Customer: Okay, I did that. It's the same address again.
+Agent: I see. Do you have a VPN client installed, the one with the blue shield icon?
+Customer: Yes, it's there, but I haven't opened it today. Actually it shows a little warning sign on the icon.

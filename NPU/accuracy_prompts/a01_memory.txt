@@ -1,0 +1,11 @@
+The following is an introduction for engineers who are new to mobile accelerators.
+
+Modern phones carry several kinds of processors on one chip. The CPU cores run the operating system and most application code. The GPU draws the screen and can run general compute work. The NPU, sometimes called a DSP or a tensor accelerator, is built for the dense multiply and accumulate loops that dominate neural networks. Each of these processors reaches memory in a different way, and that difference decides more about real performance than the peak numbers printed in a datasheet.
+
+The largest pool of memory is the main DRAM, shared by every processor. It is large, several gigabytes, but slow compared to the speed at which an accelerator can consume data. Close to each accelerator sits a much smaller memory that is fast enough to keep its arithmetic units busy. On some NPUs this is a tightly coupled memory of a few megabytes; data must be copied into it, usually by a DMA engine, before the matrix unit can read it. Between the two there are caches, which help the CPU a great deal but help an accelerator only when its access pattern is regular.
+
+A useful way to reason about a workload is to count how many bytes it must move for each arithmetic operation it performs. A large matrix multiplication reuses every loaded value many times, so it is limited by arithmetic. A matrix-vector product, which is what a language model does for every generated token, reuses almost nothing: each weight is loaded once and used once. Such a workload is limited by memory bandwidth, and making the arithmetic faster does not help at all.
+
+This is why the first token and the following tokens of a language model behave so differently. Processing the prompt is a sequence of large matrix multiplications, and the accelerator can run close to its peak. Generating each new token is a chain of matrix-vector products, and the speed is set by how quickly the weights can be streamed from memory. Techniques that reduce the number of bytes per weight, such as storing weights in four or even two bits, therefore speed up generation almost in proportion to the reduction.
+
+Explain, in a few paragraphs, how a key-value cache changes this picture during generation, and what an engineer should measure first when the generation speed is lower than expected.

@@ -1,0 +1,11 @@
+Below is an excerpt from a company policy. Explain in plain language what an employee must do in each of the situations listed at the end.
+
+Section 4. Use of company devices and data.
+4.1 Company devices, including laptops, phones and storage media, are provided for work purposes. Limited personal use is permitted provided that it does not interfere with work, does not involve unlawful content, and does not consume significant network or storage resources.
+4.2 Employees must not disable, bypass or uninstall security software installed by the IT department, including disk encryption, endpoint protection and the virtual private network client. Requests for exceptions must be submitted in writing and approved by the IT security manager before any change is made.
+4.3 Confidential information may be stored only on company devices or on storage services approved by the IT department. Confidential information must not be sent to personal email accounts or uploaded to public file sharing services. Where confidential information must be shared with an external party, the employee must use the approved secure transfer service and must obtain the consent of the information owner.
+4.4 The loss or theft of a company device, or the suspected disclosure of confidential information, must be reported to the IT service desk without delay and in any case within twenty four hours. The employee must provide a description of the device and of any information it may have held, and must cooperate with any investigation.
+4.5 When an employee leaves the company or changes role, all company devices and copies of confidential information must be returned or deleted as instructed by the employee's manager, no later than the last working day.
+4.6 Breaches of this section may lead to disciplinary action. Deliberate or repeated breaches may be treated as gross misconduct.
+
+Situations: (a) You want to check your personal email on your work laptop during lunch. (b) The VPN client slows down a video call and you would like to turn it off. (c) A supplier asks you to send a confidential price list to their personal email address. (d) You left your work phone in a taxi on Friday evening and noticed only on Saturday morning.
