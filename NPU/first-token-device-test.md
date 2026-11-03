@@ -288,6 +288,19 @@ host에서 찾은 버그 없음. 남은 설명:
 **마무리 (사용자 결정)**: 성능 목표 완료, 정확도는 나빠진 신호 없이 판정 보류로 기본값 유지, C 구조 2단계(prefill 중
 host fp16 제거)는 peak가 decode에서 생겨 이득이 없으므로 보류. 구조 정리: https://claude.ai/artifact/HG3mHZV4YXrB9KJH4MPRSF
 
+## 15회차 결과 (build `cfb6c08a5`, int8 KV 하나, 44회 rc=0)
+
+- 구조: CPU fp16 KV cache 없음. 30층 공유 fp16 staging 하나 + DSP int8 decode cache가 KV의 유일한 저장소
+  (구조: https://claude.ai/artifact/6heWrNP3GkyZZn8GKw8xkG). 끄기 `NNTR_HTP_KV_INT8_ONLY=0`
+- 정확도: 13 prompt 전부 `[PPL] decode step=` 줄이 13회차 default와 한 줄도 다르지 않음 (ratio 1.0000, verdict not worse)
+- peak (중앙값, int8only / default14 / off): p1k **3517** / 3606 / 3626, p2k **3594** / 3616 / 3636 MiB.
+  prefill 단계 −252~−266 / −168~−175 MiB, decode 단계 −89 / −22 MiB (같은 rep 10회 모두)
+- decode 단계가 준 이유: 예전 sliding 층 cache는 창 + max(INIT_SEQ_LEN, 생성) = 3072 > 2560이라 2560행 전체였고, 지금은
+  prompt + 생성분 (1218 / 2114행). 예상한 "+100 MiB"는 틀림 (예전 창 크기를 1152행으로 잘못 잡음)
+- 첫 토큰 156.1 / 160.1 ms (default14 155.1 / 153.4), prefill TPS p1k 612 / 586 (+4 %), p2k 661 / 659, gen 같음
+- 확인 안 된 것: `prefill_fills` 44회 모두 0. p2k(1986)도 한 블록(INIT_SEQ_LEN 이하)이라 fill·reseed·scale 증가 경로가
+  기기에서 한 번도 돌지 않음. int8only의 느린 첫 토큰 3회(174.6 / 183.1 / 185.1 ms, packet 101~103 ms) 원인 미확인
+
 ## 남은 일
 
 | 순서 | 일 | 조건 |
