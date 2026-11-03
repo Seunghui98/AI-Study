@@ -1,4 +1,12 @@
-# 16회차 측정 요청 (다시): int8 KV 하나의 chunk 경로 + 느린 첫 토큰
+# 16회차 측정 요청 (세 번째): int8 KV 하나의 chunk 경로 + 느린 첫 토큰
+
+두 번째 시도(`2169d3134`)도 0번에서 멈춤: 세 번째 chunk에서 "layer0_attention could not take its rows [0, 1024) back from the
+decode cache". 층의 첫 호출(scale 보정 경로)은 decode cache로 seed했지만, 두 번째 chunk부터 쓰는 f32 attention 경로는 seed 없이
+돌아가서 decode cache가 512행에 머물렀음. `6d89d157f`에서 f32 경로도 seed함. 그리고 int8only에서 seed 없이 끝난 호출이 있으면
+한 chunk 뒤가 아니라 그 자리에서 행 범위를 적고 멈춤. 이 빈틈은 default14의 chunk prompt에도 있었음(마지막 chunk가 prefill 중에
+seed하지 않고 첫 토큰으로 미룸) → 이번부터 c-d14도 마지막 chunk에서 seed함.
+
+첫 시도 기록:
 
 첫 시도(`cfb6c08a5`)는 0번에서 멈춤: 두 번째 chunk(위치 512)를 `mha_core`의 안전장치("a multi-row forwarding at 512 after the
 HTP decode hook took over the KV cache")가 막음. int8only가 prefill 호출마다 "DSP가 넘겨받음" 표시를 켰기 때문이고, 이 표시는
@@ -16,11 +24,12 @@ HTP decode hook took over the KV cache")가 막음. int8only가 prefill 호출�
 ## ① 측정 시킬 때 (그대로 붙여넣기)
 
 ```text
-nntrainer HTP(Gemma4-26B-A4B, S26U) 16회차 (다시). 코드 수정 없이 측정·보고만.
-빌드: fork Seunghui98/nntrainer, 브랜치 htp/first-token-kv-int8. git fetch 후 git rev-parse --short HEAD 가 2169d3134 인지 확인
-(다르면 측정하지 말고 해시만 보고). 15회차 뒤로 바뀐 것은 Applications/CausalLM/layers/htp_mha_core.cpp 하나 (IDL 그대로).
-평소처럼 빌드한 뒤 libcausallm.so를 새로 올리고, skel / libnntrainer.so md5가 15회차와 같은지 확인
-(39d3aca0… / 344f3c3b…; 다르면 그것도 새로 올리고 이상한 점에 적을 것). 새 libcausallm.so md5를 적을 것.
+nntrainer HTP(Gemma4-26B-A4B, S26U) 16회차 (세 번째). 코드 수정 없이 측정·보고만.
+빌드: fork Seunghui98/nntrainer, 브랜치 htp/first-token-kv-int8. git fetch 후 git rev-parse --short HEAD 가 6d89d157f 인지 확인
+(다르면 측정하지 말고 해시만 보고). 2169d3134 뒤로 바뀐 것은 Applications/CausalLM/layers/htp_mha_core.cpp 하나 (IDL 그대로).
+평소처럼 빌드한 뒤 libcausallm.so를 새로 올릴 것. skel은 지난 시도에 올린 930b6d21…, libnntrainer.so는 344f3c3b…를
+그대로 쓰고 기기 md5만 확인 (빌드로 skel md5가 또 바뀌어도 소스가 같으므로 올리지 말고 새 md5만 적을 것).
+새 libcausallm.so md5를 적을 것.
 조건: 15회차와 같음 (R5KL309ALRK, gemma4-26b-a4b-tl2-rotated, C=16, greedy, EOS 끔, 128토큰, max_seq_len 2560,
 NNTR_HTP_PAGE_CACHE=0, 매 실행 전 35 ℃ 이하, run.sh).
 
@@ -36,6 +45,7 @@ NNTR_HTP_PAGE_CACHE=0, 매 실행 전 35 ℃ 이하, run.sh).
 p2k를 c-int8로 1회 (NNTR_HTP_PROFILE=1). pool_sync 줄 원문, prefill_seeds, prefill_fills, "attn_m1: registered" 두 줄 원문,
 생성 텍스트 앞부분.
 - 기대: prefill_seeds=120, prefill_fills=90.
+- "without seeding its decode cache" 가 나오면 그 줄 원문과 직전 30줄, 명령만 보고.
 - prefill_fills가 0이면 chunk가 안 나뉜 것 → A~D 하지 말고 그 로그의 앞 50줄과 명령만 보고.
 - "FATAL ERROR" / "fell off the int8 KV path" / "could not seed" / "could not take its rows" / "not seeded" / "not filled" /
   FastRPC·DSP 에러 / crash / hang이 나오면 A~D 하지 말고 그 메시지 원문과 직전 30줄, 명령만 보고.
@@ -92,7 +102,8 @@ step 줄 같음? | scales grew 줄 수) + ppl_eval.py 출력 원문, B는 실행
   같은 scale로 다시 양자화, c-int8은 int8을 그대로 채움). 다르면 scale이 커진 prompt인지("q2 scales grew") 먼저 볼 것:
   커진 경우에는 c-int8이 int8을 한 번 더 반올림하므로 작게 다를 수 있음 → ppl_eval verdict로 판정.
 - **A, scale이 안 커졌는데 다름**: fill 경로 버그 → 처음 다른 step과 prompt로 좁힘.
-- **B**: prefill_fills = 30 × (chunk 수 − 1) (p1k 60, p2k 90), prefill_seeds = 30 × chunk 수. prefill_fill_ms가 prefill 시간에서
+- **B**: c-int8은 prefill_fills = 30 × (chunk 수 − 1) (p1k 60, p2k 90), prefill_seeds = 30 × chunk 수. c-d14는 fill 0,
+  prefill_seeds 30 (마지막 chunk만). prefill_fill_ms가 prefill 시간에서
   차지하는 몫과 prefill TPS 차이. peak는 c-int8이 c-d14보다 낮아야 함.
 - **C**: 170 ms 넘는 실행이 int8only에만 몰리면 원인을 찾음 (token1 misses, warm cancelled, mem_available 비교).
   두 셀에 고르게 나오면 기기 변동. registered 줄: int8only의 sliding 층 max_seq가 prompt + 생성분(p1k 1280, p2k 2176)인지,
