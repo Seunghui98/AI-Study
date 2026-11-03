@@ -58,7 +58,8 @@ def sign_p(wins, losses):
     if n == 0:
         return 1.0
     k = min(wins, losses)
-    return min(1.0, 2.0 * sum(math.comb(n, i) for i in range(k + 1)) / 2.0**n)
+    # integers to the last step: 2.0**n overflows a float past n = 1023
+    return min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2**n)
 
 
 def load(logdir, a, b):
@@ -189,6 +190,8 @@ def self_test():
                    sorted(rows.items())])
         v = report(load(d, "off", "default"), "off", "default")
         assert v == "default worse", v
+    # round 13's 1664 steps: 2.0**n overflowed (n > 1023)
+    assert 0.0 < sign_p(800, 860) < 1.0 and sign_p(0, 0) == 1.0
     print("SELF-TEST OK")
 
 
