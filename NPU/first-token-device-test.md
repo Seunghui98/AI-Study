@@ -316,13 +316,28 @@ host fp16 제거)는 peak가 decode에서 생겨 이득이 없으므로 보류. 
   token1 misses 174~194 (정상 ~128) → warm read 변동이고 int8only 때문이 아님
 - registered: int8only의 sliding 층 max_seq = prompt + 생성 (p1k 1280, p2k 2176), default14 2560 → 15회차 decode 감소의 원인 확인
 
+## 17회차 결과 (build `d283f77b6`, fill HVX화, 40회 rc=0)
+
+- fill: p1k 3677 → **58 ms**, p2k 7234 → **115 ms** (층당 ~1.3 ms). c-int8 prefill 153 / 157 → **231 / 305 TPS**
+  (c-d14 228 / 302와 같음)
+- 정확도 (chunk 512, c-d14 대 c-int8): ratio 0.9743, CI [0.9324, 1.0197], top1 1536 / 1542 → **c-int8 not worse**.
+  한 블록 prompt 7개는 15·16회차와 비트 동일, c-d14 재실행도 16회차와 비트 동일. chunk prompt의 c-int8은 16회차와 다름
+  (비율 재양자화를 rintf → Q15로 바꿈)
+- 한 블록 셀 (int8only / default14): 15회차 수준 그대로 (601 / 587, 666 / 666 TPS, peak 3520 / 3607, 3595 / 3618)
+- chunk 512 자체가 prefill을 절반 이하로 만듦 (두 셀 모두): 강제로 작은 chunk를 쓴 측정 조건 탓이고 이 작업과 무관.
+  기본 설정에서는 INIT_SEQ_LEN을 넘는 prompt만 chunk가 나뉨
+
+**int8 KV 하나 (U) 완료**: CPU fp16 KV cache 없음, 한 블록·chunk 모두 동작, 정확도 not worse(chunk) / 비트 동일(한 블록),
+속도 같거나 빠름, 메모리 감소.
+
 ## 남은 일
 
 | 순서 | 일 | 조건 |
 |---|---|---|
-| - | (보류) C 구조 2단계: prefill 중 host fp16 제거 | peak가 prefill로 옮겨 오면 |
-| - | (보류) 정확도 3 % 판정: 256 토큰 × 20+ prompt | 필요할 때 |
+| - | (보류) 정확도 판정 off 대비: 13회차 nll 0.974, CI [0.88, 1.07] undecided. 256 토큰 × 20+ prompt | 필요할 때 |
+| - | (여지) 첫 토큰 변동: warm read 등록이 적은 회차(55~109개)에 expert miss ↑ → 170~195 ms. 셀과 무관 | |
 | - | (여지) 첫 토큰: params 38 ms(DSP 17.5), token1 expert miss ~30 ms | |
+| - | (제약) int8only에서 save/load_kvcache 거부, 생성 뒤 두 번째 prompt 거부 (전부터 한 process 한 prompt) | 필요해지면 |
 | - | DSP fp16 attention 커널 NaN (3회차) | 별건 |
 
 ---
