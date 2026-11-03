@@ -1,4 +1,4 @@
-# 13회차 측정 요청: 정확도 검증 강화 (prompt 13개, off ↔ default)
+# 13회차 측정 요청: 정확도 검증 강화 (prompt 13개, off ↔ default) + 첫 토큰 확인
 
 목적: KV adoption(default)이 원래 동작(off)보다 정확도가 나쁘지 않은지, 2개 prompt보다 훨씬 좁은 신뢰구간으로 판정.
 기준: CPU attention(fp16 KV) 경로의 greedy 출력 128 토큰. 두 셀 모두 이 토큰을 강제로 넣으며 단계마다 nll을 잼.
@@ -9,9 +9,10 @@
 
 ```text
 nntrainer HTP(Gemma4-26B-A4B, S26U) 13회차: 정확도 검증. 코드 수정 없이 측정·보고만.
-빌드: fork Seunghui98/nntrainer, 브랜치 htp/accuracy-gate (12회차 브랜치 + decode 단계 줄에 margin/gap 추가).
-먼저 git fetch 후 그 브랜치를 checkout, git rev-parse --short HEAD 가 b0b3c80b5 인지 확인. 다르면 측정하지 말고 해시만 보고.
-다시 빌드·stage (skel, libnntrainer.so, libcausallm.so; IDL은 12회차와 같음).
+빌드: fork Seunghui98/nntrainer, 브랜치 htp/first-token-kv-int8 (htp/accuracy-gate도 같은 커밋).
+먼저 git fetch 후 git rev-parse --short HEAD 가 18ace9d69 인지 확인. 다르면 측정하지 말고 해시만 보고.
+다시 빌드·stage: 이번에는 IDL이 바뀜 (graph_set_params 메서드 추가) → IDL에서 stub/skel을 다시 생성하는 전체 빌드로
+skel, libnntrainer.so, libcausallm.so 모두 새로 올릴 것. stage.sh가 libc++_shared 단계에서 멈추면 12회차처럼 md5만 확인.
 기기·모델·조건: R5KL309ALRK (ANDROID_SERIAL), models/gemma4-26b-a4b-tl2-rotated, C=16, greedy, EOS 끔, 128토큰,
 max_seq_len 2560, NNTR_HTP_PAGE_CACHE=0, 매 실행 전 35 ℃ 이하. run.sh로. NNTR_HTP_PROFILE은 끔(정확도만).
 
@@ -38,6 +39,15 @@ prompt 순서는 섞어서(off와 default를 번갈아), 같은 prompt의 두 �
 - 생성 텍스트는 필요 없음 (forced 실행이라 기준 토큰열과 같음)
 - prompt가 잘렸다는 줄(truncated / does not fit)이 있으면 원문
 
+## 4. 첫 토큰 확인 (같은 빌드, p1k · p2k, 셀마다 5회, NNTR_HTP_PROFILE=1, NNTR_PPL_DECODE 없이, 셀 순서 돌아가며)
+셀:  default (스위치 없음) / nobatch (NNTR_HTP_PARAM_BATCH=0) / off (NNTR_HTP_KV_ADOPT=0 NNTR_MOE_WARM=0)
+실행마다: prefill TPS, generation TPS, first_token ms, timeline 줄 (graph_init / to_token / pool_sync / to_packet / packet),
+params 줄 (params / mib / batched / ms / dsp_ms), token1 us / misses, warm registered / cancelled, peak MiB,
+peak by phase, ids md5가 12회차 같은 동작 셀과 같은지.
+중앙값 표, 같은 rep 차이표 (default − nobatch의 params ms · first_token, default − off의 first_token · peak).
+12회차 중앙값 (default / off): first_token 170.3 / 427.8 · 175.5 / 498.6 ms, to_token 35.4 / 138.1 · 39.1 / 209.3 ms(rep 중앙),
+params 38.3 / 43.9 · 38.8 / 44.7 ms.
+
 ## 규칙
 - 실제로 돌린 것만 "확인됨". 못 돌린 항목은 못 돌렸다고 적을 것.
 - 숫자를 추정하거나 지난 결과로 채우지 말 것.
@@ -53,7 +63,13 @@ prompt 순서는 섞어서(off와 default를 번갈아), 같은 prompt의 두 �
 ppl_eval.py 출력 원문 전체, prompt별 ppl_compare.py 출력 원문 전체, 맨 뒤에 "이상한 점"과 원본 로그 경로.
 ```
 
-## 결과 해석
+## 결과 해석 (4. 첫 토큰)
+
+- **to_token이 ~35 ms → 수 ms**: 층마다 RoPE 표를 새로 만들고 memcmp하던 비용이 원인이었음 (첫 토큰 −30 ms 안팎 기대).
+- **params ms가 nobatch보다 작으면**: 301번의 왕복이 원인이었음 (dsp_ms 17.5 ms 근처까지 내려갈 수 있음).
+- ids는 12회차와 같아야 함 (표와 파라미터 값은 그대로, 보내는 방식만 바뀜).
+
+## 결과 해석 (정확도)
 
 - **default not worse**: KV adoption 기본값 유지.
 - **undecided**: 신뢰구간이 여전히 넓음 → prompt를 늘리거나 256 토큰으로 (num_to_generate 변경).
